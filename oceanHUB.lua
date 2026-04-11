@@ -1,7 +1,7 @@
 --[[
-    🌊 Ocean Hub - Loader
-    Auto-detect IP → VN thì hiện GUI tiếng Việt + shoptdang.vn
-    Nước ngoài thì hiện GUI English + Linkvertise
+    Ocean Hub - Loader
+    Auto-detect IP: VN = Vietnamese GUI + shoptdang.vn
+    International = English GUI + Linkvertise
 ]]
 
 local GETKEY_URL = "https://ads.luarmor.net/get_key?for=OCEAN_HUB-VKrSguUYfFjq"
@@ -17,7 +17,7 @@ pcall(function()
     end
 end)
 
--- Xoá GUI cũ nếu có
+-- Remove old GUI if exists
 if game:GetService("CoreGui"):FindFirstChild("SailorKeyGui") then
     game:GetService("CoreGui"):FindFirstChild("SailorKeyGui"):Destroy()
 end
@@ -68,7 +68,7 @@ local icon = Instance.new("TextLabel")
 icon.Size = UDim2.new(1, 0, 0, 45)
 icon.Position = UDim2.new(0, 0, 0, 18)
 icon.BackgroundTransparency = 1
-icon.Text = "\226\154\147" -- ⚓
+icon.Text = "\226\154\147"
 icon.TextSize = 36
 icon.Font = Enum.Font.GothamBold
 icon.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -177,7 +177,7 @@ if isVN then
     buyBtn.Position = UDim2.new(0.5, -160, 0, 275)
     buyBtn.BackgroundColor3 = Color3.fromRGB(45, 40, 15)
     buyBtn.BorderSizePixel = 0
-    buyBtn.Text = "\240\159\155\146 Mua Key Tai shoptdang.vn (28 Coin)"
+    buyBtn.Text = "\240\159\155\146 Mua Key Tai shoptdang.vn (58 Coin)"
     buyBtn.TextSize = 13
     buyBtn.Font = Enum.Font.GothamBold
     buyBtn.TextColor3 = Color3.fromRGB(250, 204, 21)
@@ -280,7 +280,7 @@ closeBtn.MouseButton1Click:Connect(function()
     gui:Destroy()
 end)
 
--- Submit → set script_key → ẩn GUI → load Luarmor script
+-- Submit: set script_key, hide GUI, load Luarmor
 submitBtn.MouseButton1Click:Connect(function()
     local key = keyInput.Text:gsub("%s+", "")
     if key == "" then
@@ -289,7 +289,7 @@ submitBtn.MouseButton1Click:Connect(function()
         return
     end
 
-    -- Disable nút + hiện loading
+    -- Disable button + show loading
     submitBtn.Text = isVN and "Dang xac nhan..." or "Verifying..."
     submitBtn.BackgroundColor3 = Color3.fromRGB(100, 116, 139)
     submitBtn.AutoButtonColor = false
@@ -301,7 +301,7 @@ submitBtn.MouseButton1Click:Connect(function()
 
     task.wait(0.2)
 
-    -- Ẩn GUI ngay trước khi load (để user thấy script chạy)
+    -- Hide GUI before loading script
     local function hideGui()
         TweenService:Create(overlay, TweenInfo.new(0.25), {BackgroundTransparency = 1}):Play()
         TweenService:Create(mainFrame, TweenInfo.new(0.25), {Position = UDim2.new(0.5, -190, 0, -500)}):Play()
@@ -309,16 +309,16 @@ submitBtn.MouseButton1Click:Connect(function()
         gui:Destroy()
     end
 
-    -- Load Luarmor script (Luarmor sẽ verify key server-side)
+    -- Load Luarmor script (server-side key verify)
     local success, err = pcall(function()
         loadstring(game:HttpGet(LUARMOR_URL))()
     end)
 
     if success then
-        -- Key đúng → Luarmor load xong → ẩn GUI
+        -- Key valid, hide GUI
         hideGui()
     else
-        -- Key sai hoặc lỗi → hiện lại GUI
+        -- Key invalid or error, show GUI again
         local errMsg = tostring(err)
         status.TextColor3 = Color3.fromRGB(239, 68, 68)
         if errMsg:find("key") or errMsg:find("Key") or errMsg:find("whitelist") then
