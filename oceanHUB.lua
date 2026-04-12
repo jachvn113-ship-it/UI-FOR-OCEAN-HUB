@@ -399,6 +399,10 @@ submitBtn.MouseButton1Click:Connect(function()
 
     task.wait(0.2)
 
+    -- Save key FIRST (before Luarmor blocks forever on success)
+    deleteSavedKey()
+    saveKey(key)
+
     -- Hide GUI animation
     local function hideGui()
         TweenService:Create(overlay, TweenInfo.new(0.25), {BackgroundTransparency = 1}):Play()
@@ -407,16 +411,36 @@ submitBtn.MouseButton1Click:Connect(function()
         gui:Destroy()
     end
 
+    -- Hide GUI before loading (Luarmor blocks on success)
+    hideGui()
+
     -- Try to load with the new key
+    -- If key is valid: Luarmor loads main script, never returns
+    -- If key is invalid: pcall catches error, we show GUI again
     local success, err = tryLoadWithKey(key)
 
-    if success then
-        -- Key valid! Save to file (delete old key first)
+    -- Only reaches here if key FAILED (invalid/expired)
+    if not success then
+        -- Delete the saved key since it's invalid
         deleteSavedKey()
-        saveKey(key)
-        hideGui()
-    else
-        -- Key invalid or error, show GUI again
+
+        -- Re-create GUI for retry
+        gui = Instance.new("ScreenGui")
+        gui.Name = "SailorKeyGui"
+        gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        gui.ResetOnSpawn = false
+        gui.Parent = game:GetService("CoreGui")
+
+        overlay = Instance.new("Frame")
+        overlay.Size = UDim2.new(1, 0, 1, 0)
+        overlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+        overlay.BackgroundTransparency = 0.4
+        overlay.BorderSizePixel = 0
+        overlay.Parent = gui
+
+        mainFrame.Parent = gui
+        mainFrame.Position = UDim2.new(0.5, -190, 0.5, -frameHeight/2)
+
         local errMsg = tostring(err)
         status.TextColor3 = Color3.fromRGB(239, 68, 68)
         if errMsg:find("key") or errMsg:find("Key") or errMsg:find("whitelist") then
