@@ -47,11 +47,32 @@ local function deleteSavedKey()
     end)
 end
 
+-- ========== PRE-FETCH LUARMOR LOADER (1 lan duy nhat) ==========
+local _luarmorCode = nil
+
+local function getLuarmorCode()
+    if _luarmorCode then return _luarmorCode end
+    local ok, code = pcall(function()
+        return game:HttpGet(LUARMOR_URL)
+    end)
+    if ok and code and #code > 100 then
+        _luarmorCode = code
+    end
+    return _luarmorCode
+end
+
+-- Pre-fetch ngay khi script bat dau (chay song song voi IP check)
+task.spawn(getLuarmorCode)
+
 -- ========== TRY LOADING WITH A KEY ==========
 local function tryLoadWithKey(key)
     getgenv().script_key = key
+    local code = getLuarmorCode()
+    if not code then
+        return false, "Failed to download loader"
+    end
     local success, err = pcall(function()
-        loadstring(game:HttpGet(LUARMOR_URL))()
+        loadstring(code)()
     end)
     return success, err
 end
