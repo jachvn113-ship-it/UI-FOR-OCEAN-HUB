@@ -1,12 +1,77 @@
 --[[
-    Ocean Hub - Loader
+    Ocean Hub - Loader with Key Cache
     Auto-detect IP: VN = Vietnamese GUI + shoptdang.vn
     International = English GUI + Linkvertise
+    Auto-save key to file for reuse across servers
 ]]
 
 local GETKEY_URL = "https://ads.luarmor.net/get_key?for=OCEAN_HUB-VKrSguUYfFjq"
 local BUYKEY_URL = "https://shoptdang.vn/cloudphone"
 local LUARMOR_URL = "https://api.luarmor.net/files/v4/loaders/e18db1da2d589242931944ef08da4f1c.lua"
+local KEY_FOLDER = "OceanHub"
+local KEY_FILE = "OceanHub/key.txt"
+
+-- ========== FILE SYSTEM HELPERS ==========
+local canSaveFiles = (typeof(writefile) == "function" and typeof(readfile) == "function" and typeof(isfile) == "function")
+
+local function saveKey(key)
+    if not canSaveFiles then return end
+    pcall(function()
+        if not isfolder(KEY_FOLDER) then
+            makefolder(KEY_FOLDER)
+        end
+        writefile(KEY_FILE, key)
+    end)
+end
+
+local function loadSavedKey()
+    if not canSaveFiles then return nil end
+    local ok, key = pcall(function()
+        if isfile(KEY_FILE) then
+            return readfile(KEY_FILE)
+        end
+        return nil
+    end)
+    if ok and key and #key > 5 then
+        return key:gsub("%s+", "")
+    end
+    return nil
+end
+
+local function deleteSavedKey()
+    if not canSaveFiles then return end
+    pcall(function()
+        if isfile(KEY_FILE) then
+            delfile(KEY_FILE)
+        end
+    end)
+end
+
+-- ========== TRY LOADING WITH A KEY ==========
+local function tryLoadWithKey(key)
+    getgenv().script_key = key
+    local success, err = pcall(function()
+        loadstring(game:HttpGet(LUARMOR_URL))()
+    end)
+    return success, err
+end
+
+-- ========== CHECK SAVED KEY FIRST ==========
+local savedKey = loadSavedKey()
+
+if savedKey then
+    local success, err = tryLoadWithKey(savedKey)
+    if success then
+        -- Saved key still works, script loaded, done!
+        return
+    else
+        -- Saved key expired or invalid, delete it
+        deleteSavedKey()
+        warn("[OceanHub] Saved key expired, need new key")
+    end
+end
+
+-- ========== KEY IS INVALID OR NONE SAVED, SHOW GUI ==========
 
 -- Check if user is from Vietnam via IP
 local isVN = false
@@ -90,11 +155,18 @@ local sub = Instance.new("TextLabel")
 sub.Size = UDim2.new(1, 0, 0, 20)
 sub.Position = UDim2.new(0, 0, 0, 88)
 sub.BackgroundTransparency = 1
-sub.Text = isVN and "Nhap key de tiep tuc su dung script" or "Enter your key to continue"
-sub.TextSize = 12
 sub.Font = Enum.Font.Gotham
 sub.TextColor3 = Color3.fromRGB(148, 163, 184)
 sub.Parent = mainFrame
+
+-- Show different subtitle if saved key expired
+if savedKey then
+    sub.Text = isVN and "Key cu het han! Nhap key moi" or "Key expired! Enter a new key"
+    sub.TextSize = 12
+else
+    sub.Text = isVN and "Nhap key de tiep tuc su dung script" or "Enter your key to continue"
+    sub.TextSize = 12
+end
 
 -- Input frame
 local inputFrame = Instance.new("Frame")
@@ -280,7 +352,7 @@ closeBtn.MouseButton1Click:Connect(function()
     gui:Destroy()
 end)
 
--- Submit: set script_key, hide GUI, load Luarmor
+-- Submit: set script_key, hide GUI, load Luarmor, save key
 submitBtn.MouseButton1Click:Connect(function()
     local key = keyInput.Text:gsub("%s+", "")
     if key == "" then
@@ -296,12 +368,9 @@ submitBtn.MouseButton1Click:Connect(function()
     status.TextColor3 = Color3.fromRGB(250, 204, 21)
     status.Text = isVN and "Dang kiem tra key, vui long cho..." or "Checking key, please wait..."
 
-    -- Set script_key cho Luarmor
-    getgenv().script_key = key
-
     task.wait(0.2)
 
-    -- Hide GUI before loading script
+    -- Hide GUI animation
     local function hideGui()
         TweenService:Create(overlay, TweenInfo.new(0.25), {BackgroundTransparency = 1}):Play()
         TweenService:Create(mainFrame, TweenInfo.new(0.25), {Position = UDim2.new(0.5, -190, 0, -500)}):Play()
@@ -309,13 +378,13 @@ submitBtn.MouseButton1Click:Connect(function()
         gui:Destroy()
     end
 
-    -- Load Luarmor script (server-side key verify)
-    local success, err = pcall(function()
-        loadstring(game:HttpGet(LUARMOR_URL))()
-    end)
+    -- Try to load with the new key
+    local success, err = tryLoadWithKey(key)
 
     if success then
-        -- Key valid, hide GUI
+        -- Key valid! Save to file (delete old key first)
+        deleteSavedKey()
+        saveKey(key)
         hideGui()
     else
         -- Key invalid or error, show GUI again
