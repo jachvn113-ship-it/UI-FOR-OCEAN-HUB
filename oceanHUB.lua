@@ -8,20 +8,25 @@
 local GETKEY_URL = "https://ads.luarmor.net/get_key?for=OCEAN_HUB-VKrSguUYfFjq"
 local BUYKEY_URL = "https://shoptdang.vn/cloudphone"
 local LUARMOR_URL = "https://api.luarmor.net/files/v4/loaders/e18db1da2d589242931944ef08da4f1c.lua"
-local KEY_FOLDER = "OceanHub"
-local KEY_FILE = "OceanHub/key.txt"
+local KEY_FILE = "oceanhub_key.txt"
 
 -- ========== FILE SYSTEM HELPERS ==========
-local canSaveFiles = (typeof(writefile) == "function" and typeof(readfile) == "function" and typeof(isfile) == "function")
+local canSaveFiles = (type(writefile) == "function" and type(readfile) == "function" and type(isfile) == "function")
+warn("[OceanHub] File system support: " .. tostring(canSaveFiles))
 
 local function saveKey(key)
-    if not canSaveFiles then return end
-    pcall(function()
-        if not isfolder(KEY_FOLDER) then
-            makefolder(KEY_FOLDER)
-        end
+    if not canSaveFiles then
+        warn("[OceanHub] Cannot save key - executor has no file support")
+        return
+    end
+    local ok, err = pcall(function()
         writefile(KEY_FILE, key)
     end)
+    if ok then
+        warn("[OceanHub] Key saved to " .. KEY_FILE)
+    else
+        warn("[OceanHub] Failed to save key: " .. tostring(err))
+    end
 end
 
 local function loadSavedKey()
@@ -33,8 +38,10 @@ local function loadSavedKey()
         return nil
     end)
     if ok and key and #key > 5 then
+        warn("[OceanHub] Loaded saved key: " .. key:sub(1, 6) .. "...")
         return key:gsub("%s+", "")
     end
+    warn("[OceanHub] No saved key found")
     return nil
 end
 
@@ -42,9 +49,10 @@ local function deleteSavedKey()
     if not canSaveFiles then return end
     pcall(function()
         if isfile(KEY_FILE) then
-            delfile(KEY_FILE)
+            writefile(KEY_FILE, "")
         end
     end)
+    warn("[OceanHub] Saved key cleared")
 end
 
 -- ========== PRE-FETCH LUARMOR LOADER (1 lan duy nhat) ==========
