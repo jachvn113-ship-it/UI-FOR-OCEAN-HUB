@@ -692,7 +692,7 @@ task.spawn(function()
         end
     end)
 
-    local TWEEN_SPEED      = 75
+    local TWEEN_SPEED      = 50
     local ARRIVE_DIST      = 6
     local BOSS_STANDOFF    = 10
     local LOOP_WAIT        = 0.15
