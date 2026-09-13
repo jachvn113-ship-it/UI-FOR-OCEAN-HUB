@@ -1,0 +1,685 @@
+-- ============================================================
+-- COMBINED v6
+--  UI Toggle: GlobalBoss / Chihora / Yhwach
+--  Weapon Auto-Equip (từ Backpack, giữ mãi kể cả respawn)
+--  Cache/Memory Cleanup
+-- ============================================================
+
+local Players           = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService      = game:GetService("TweenService")
+local Workspace         = game:GetService("Workspace")
+local LocalPlayer       = Players.LocalPlayer
+
+-- ============================================================
+-- STATE (UI điều khiển)
+-- ============================================================
+local State = {
+    GlobalBoss = true,
+    Chihora    = true,
+    Yhwach     = true,
+    Weapon     = nil,   -- tên Tool muốn luôn equip
+}
+
+-- ============================================================
+-- UI
+-- ============================================================
+local pg = LocalPlayer:WaitForChild("PlayerGui")
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "AutoCtrlUI"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Parent = pg
+
+local main = Instance.new("Frame")
+main.Size = UDim2.new(0, 220, 0, 330)
+main.Position = UDim2.new(0, 20, 0, 100)
+main.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+main.BorderSizePixel = 0
+main.Active = true
+main.Draggable = true
+main.Parent = screenGui
+do
+    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 10); c.Parent = main
+    local s = Instance.new("UIStroke"); s.Color = Color3.fromRGB(60, 60, 75); s.Thickness = 1; s.Parent = main
+end
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 32)
+title.BackgroundColor3 = Color3.fromRGB(32, 32, 40)
+title.BorderSizePixel = 0
+title.Text = "⚙  AUTO CONTROLS"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.Font = Enum.Font.GothamBold
+title.TextSize = 13
+title.Parent = main
+do
+    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 10); c.Parent = title
+end
+
+-- ---------- TOGGLES ----------
+local toggleHolder = Instance.new("Frame")
+toggleHolder.Size = UDim2.new(1, -20, 0, 100)
+toggleHolder.Position = UDim2.new(0, 10, 0, 40)
+toggleHolder.BackgroundTransparency = 1
+toggleHolder.Parent = main
+do
+    local l = Instance.new("UIListLayout")
+    l.Padding = UDim.new(0, 6)
+    l.SortOrder = Enum.SortOrder.LayoutOrder
+    l.Parent = toggleHolder
+end
+
+local function makeToggle(name, key, order)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 0, 28)
+    btn.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+    btn.BorderSizePixel = 0
+    btn.Text = ""
+    btn.AutoButtonColor = false
+    btn.LayoutOrder = order
+    btn.Parent = toggleHolder
+    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 6); c.Parent = btn
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, -50, 1, 0)
+    lbl.Position = UDim2.new(0, 12, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = name
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.TextColor3 = Color3.fromRGB(230, 230, 230)
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextSize = 12
+    lbl.Parent = btn
+
+    local ind = Instance.new("TextLabel")
+    ind.Size = UDim2.new(0, 40, 1, 0)
+    ind.Position = UDim2.new(1, -44, 0, 0)
+    ind.BackgroundTransparency = 1
+    ind.Font = Enum.Font.GothamBold
+    ind.TextSize = 12
+    ind.Parent = btn
+
+    local function refresh()
+        if State[key] then
+            ind.Text = "ON"
+            ind.TextColor3 = Color3.fromRGB(80, 220, 120)
+            btn.BackgroundColor3 = Color3.fromRGB(45, 70, 55)
+        else
+            ind.Text = "OFF"
+            ind.TextColor3 = Color3.fromRGB(220, 90, 90)
+            btn.BackgroundColor3 = Color3.fromRGB(60, 45, 45)
+        end
+    end
+    refresh()
+
+    btn.MouseButton1Click:Connect(function()
+        State[key] = not State[key]
+        refresh()
+        print(("[UI] %s = %s"):format(name, State[key] and "ON" or "OFF"))
+    end)
+end
+
+makeToggle("Global Boss", "GlobalBoss", 1)
+makeToggle("Chihora",     "Chihora",    2)
+makeToggle("Yhwach",      "Yhwach",     3)
+
+-- ---------- WEAPON LIST ----------
+local wTitle = Instance.new("TextLabel")
+wTitle.Size = UDim2.new(1, -20, 0, 22)
+wTitle.Position = UDim2.new(0, 10, 0, 150)
+wTitle.BackgroundTransparency = 1
+wTitle.Text = "🔫 Weapon (auto equip)"
+wTitle.TextXAlignment = Enum.TextXAlignment.Left
+wTitle.TextColor3 = Color3.fromRGB(200, 200, 210)
+wTitle.Font = Enum.Font.GothamBold
+wTitle.TextSize = 12
+wTitle.Parent = main
+
+local weaponList = Instance.new("ScrollingFrame")
+weaponList.Size = UDim2.new(1, -20, 0, 148)
+weaponList.Position = UDim2.new(0, 10, 0, 174)
+weaponList.BackgroundColor3 = Color3.fromRGB(32, 32, 40)
+weaponList.BorderSizePixel = 0
+weaponList.ScrollBarThickness = 4
+weaponList.CanvasSize = UDim2.new(0, 0, 0, 0)
+weaponList.Parent = main
+do
+    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 6); c.Parent = weaponList
+    local l = Instance.new("UIListLayout")
+    l.Padding = UDim.new(0, 4)
+    l.SortOrder = Enum.SortOrder.LayoutOrder
+    l.Parent = weaponList
+    local p = Instance.new("UIPadding")
+    p.PaddingTop = UDim.new(0, 4)
+    p.PaddingLeft = UDim.new(0, 4)
+    p.PaddingRight = UDim.new(0, 4)
+    p.Parent = weaponList
+end
+
+local function refreshWeapons()
+    for _, ch in ipairs(weaponList:GetChildren()) do
+        if ch:IsA("TextButton") or ch:IsA("TextLabel") then ch:Destroy() end
+    end
+
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+    local char     = LocalPlayer.Character
+    local seen, list = {}, {}
+    if backpack then
+        for _, item in ipairs(backpack:GetChildren()) do
+            if item:IsA("Tool") and not seen[item.Name] then
+                seen[item.Name] = true
+                table.insert(list, item.Name)
+            end
+        end
+    end
+    if char then
+        for _, item in ipairs(char:GetChildren()) do
+            if item:IsA("Tool") and not seen[item.Name] then
+                seen[item.Name] = true
+                table.insert(list, item.Name)
+            end
+        end
+    end
+
+    if #list == 0 then
+        local empty = Instance.new("TextLabel")
+        empty.Size = UDim2.new(1, -8, 0, 24)
+        empty.BackgroundTransparency = 1
+        empty.Text = "(Không có vũ khí)"
+        empty.TextColor3 = Color3.fromRGB(140, 140, 150)
+        empty.Font = Enum.Font.Gotham
+        empty.TextSize = 11
+        empty.Parent = weaponList
+        return
+    end
+
+    for i, name in ipairs(list) do
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(1, -8, 0, 24)
+        btn.BackgroundColor3 = (State.Weapon == name)
+            and Color3.fromRGB(60, 90, 140)
+            or  Color3.fromRGB(48, 48, 58)
+        btn.BorderSizePixel = 0
+        btn.Text = name
+        btn.TextColor3 = Color3.fromRGB(230, 230, 230)
+        btn.Font = Enum.Font.Gotham
+        btn.TextSize = 11
+        btn.LayoutOrder = i
+        btn.Parent = weaponList
+        local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 4); c.Parent = btn
+
+        btn.MouseButton1Click:Connect(function()
+            if State.Weapon == name then
+                State.Weapon = nil
+                print("[UI] Weapon OFF")
+            else
+                State.Weapon = name
+                print("[UI] Weapon = " .. name)
+            end
+            refreshWeapons()
+        end)
+    end
+
+    weaponList.CanvasSize = UDim2.new(0, 0, 0, weaponList.UIListLayout.AbsoluteContentSize.Y + 10)
+end
+
+-- theo dõi backpack thay đổi
+task.spawn(function()
+    local bp = LocalPlayer:WaitForChild("Backpack", 30)
+    if bp then
+        bp.ChildAdded:Connect(function() task.wait(0.1); pcall(refreshWeapons) end)
+        bp.ChildRemoved:Connect(function() task.wait(0.1); pcall(refreshWeapons) end)
+    end
+end)
+task.spawn(function()
+    while true do
+        task.wait(2)
+        pcall(refreshWeapons)
+    end
+end)
+refreshWeapons()
+
+-- ============================================================
+-- WEAPON AUTO-EQUIP (kể cả khi respawn/chết)
+-- ============================================================
+task.spawn(function()
+    while true do
+        if State.Weapon then
+            local char = LocalPlayer.Character
+            local hum  = char and char:FindFirstChildOfClass("Humanoid")
+            local backpack = LocalPlayer:FindFirstChild("Backpack")
+            if char and hum and backpack then
+                local equipped = char:FindFirstChild(State.Weapon)
+                local isTool = equipped and equipped:IsA("Tool")
+                if not isTool then
+                    local tool = backpack:FindFirstChild(State.Weapon)
+                    if tool and tool:IsA("Tool") then
+                        pcall(function() hum:EquipTool(tool) end)
+                    end
+                end
+            end
+        end
+        task.wait(0.4)
+    end
+end)
+
+-- ============================================================
+-- BỘ DỌN RÁC
+-- ============================================================
+task.spawn(function()
+    local lastFull = 0
+    while true do
+        local now = os.clock()
+        if now - lastFull >= 5 then
+            lastFull = now
+            pcall(function() collectgarbage("collect") end)
+        else
+            pcall(function() collectgarbage("step") end)
+        end
+        task.wait(1)
+    end
+end)
+
+-- ============================================================
+-- CACHE
+-- ============================================================
+local Cache = { enemiesFolder = nil, npcsFolder = nil, lastRefresh = 0, TTL = 2.0 }
+local function refreshCache(force)
+    local now = os.clock()
+    if not force and (now - Cache.lastRefresh) < Cache.TTL then return end
+    Cache.lastRefresh   = now
+    Cache.enemiesFolder = Workspace:FindFirstChild("Enemies")
+    Cache.npcsFolder    = Workspace:FindFirstChild("NPCs")
+end
+
+-- ============================================================
+-- PART A: AUTO GLOBAL BOSS (có toggle)
+-- ============================================================
+task.spawn(function()
+    local prompt = pg:WaitForChild("GlobalBossPrompt", 30)
+    if not prompt then
+        warn("[AutoJoin] Không tìm thấy GlobalBossPrompt")
+        return
+    end
+
+    local function findChild(parent, ...)
+        if not parent then return nil end
+        local node = parent
+        for _, name in ipairs({...}) do
+            if not node then return nil end
+            node = node:FindFirstChild(name)
+        end
+        return node
+    end
+
+    local OfferPanel  = prompt:WaitForChild("OfferPanel", 10)
+    local PartyPanel  = prompt:WaitForChild("PartyPanel", 10)
+    local StatusPanel = prompt:WaitForChild("StatusPanel", 10)
+    if not (OfferPanel and PartyPanel and StatusPanel) then
+        warn("[AutoJoin] Thiếu panel, thoát.")
+        return
+    end
+
+    local OfferJoin   = findChild(OfferPanel,  "ButtonHolder", "JoinButton")
+    local PartyJoin   = findChild(PartyPanel,  "ButtonHolder", "JoinButton")
+    local RefreshBtn  = findChild(StatusPanel, "ButtonHolder", "RefreshButton")
+    local StatusLabel = findChild(StatusPanel, "StatusLabel")
+    local TitleLabel  = findChild(StatusPanel, "TitleLabel")
+
+    local COOLDOWN, JOIN_DEBOUNCE, REFRESH_DEBOUNCE = 0.5, 1.0, 1.5
+    local queued = false
+    local lastJoinAt, lastRefreshAt, lastStateLog = 0, 0, ""
+
+    local function contains(text, kw)
+        if type(text) ~= "string" or type(kw) ~= "string" then return false end
+        return string.find(string.lower(text), string.lower(kw), 1, true) ~= nil
+    end
+    local function fireButton(btn)
+        if not btn or not btn.Visible or btn.Active == false then return false end
+        return pcall(function()
+            if btn:IsA("TextButton") or btn:IsA("ImageButton") then btn:Activated() end
+        end)
+    end
+    local ERROR_KEYWORDS = {
+        "GlobalBoss service is unavailable","Try again","unavailable","error",
+        "failed","unable","retry",
+    }
+    local function isErrorText(text)
+        if type(text) ~= "string" then return false end
+        for _, kw in ipairs(ERROR_KEYWORDS) do
+            if contains(text, kw) then return true, kw end
+        end
+        return false, nil
+    end
+    local function isQueueSuccess(t)
+        return contains(t, "queued for the GlobalBoss")
+           and contains(t, "Parties will never be split")
+    end
+
+    print("[AutoJoin] Bắt đầu quét...")
+
+    while true do
+        if not State.GlobalBoss then
+            task.wait(0.5)
+        else
+            if not prompt or not prompt.Parent then
+                print("[AutoJoin] GUI mất, chờ tạo lại...")
+                prompt = pg:WaitForChild("GlobalBossPrompt", 30)
+                if not prompt then
+                    print("[AutoJoin] Không có GUI, dừng.")
+                    break
+                end
+                OfferPanel  = prompt:WaitForChild("OfferPanel", 10)
+                PartyPanel  = prompt:WaitForChild("PartyPanel", 10)
+                StatusPanel = prompt:WaitForChild("StatusPanel", 10)
+                OfferJoin   = findChild(OfferPanel,  "ButtonHolder", "JoinButton")
+                PartyJoin   = findChild(PartyPanel,  "ButtonHolder", "JoinButton")
+                RefreshBtn  = findChild(StatusPanel, "ButtonHolder", "RefreshButton")
+                StatusLabel = findChild(StatusPanel, "StatusLabel")
+                TitleLabel  = findChild(StatusPanel, "TitleLabel")
+            end
+
+            local now = os.clock()
+            local statusText = (StatusLabel and StatusLabel.Text) or ""
+            local titleText  = (TitleLabel  and TitleLabel.Text)  or ""
+
+            if isQueueSuccess(statusText) then
+                if not queued then
+                    queued = true
+                    print("[AutoJoin] ✅ ĐÃ VÀO QUEUE THÀNH CÔNG!")
+                end
+            else
+                if queued then
+                    queued = false
+                    print("[AutoJoin] 🔄 Queue không còn, quay lại chế độ join.")
+                end
+            end
+
+            local hasErr, kw = isErrorText(statusText)
+            if not hasErr then hasErr, kw = isErrorText(titleText) end
+
+            if hasErr then
+                if queued then queued = false; print("[AutoJoin] ⚠️ Lỗi sau queue, reset.") end
+                if RefreshBtn and RefreshBtn.Visible and (now - lastRefreshAt) > REFRESH_DEBOUNCE then
+                    lastRefreshAt = now
+                    fireButton(RefreshBtn)
+                    print(("[AutoJoin] ⚠️ Lỗi (%s) -> Refresh."):format(tostring(kw)))
+                end
+            end
+
+            if not queued and (now - lastJoinAt) > JOIN_DEBOUNCE then
+                if OfferJoin and OfferJoin.Visible and OfferJoin.Active ~= false then
+                    if fireButton(OfferJoin) then
+                        lastJoinAt = now
+                        print("[AutoJoin] 👉 Bấm OfferPanel.JoinButton")
+                    end
+                elseif PartyJoin and PartyJoin.Visible and PartyJoin.Active ~= false then
+                    if fireButton(PartyJoin) then
+                        lastJoinAt = now
+                        print("[AutoJoin] 👉 Bấm PartyPanel.JoinButton")
+                    end
+                end
+            end
+
+            local state = queued and "QUEUED" or (hasErr and "ERROR" or "TRYING")
+            if state ~= lastStateLog then
+                lastStateLog = state
+                print(("[AutoJoin] Trạng thái: %s | Status='%s'"):format(state, statusText))
+            end
+
+            task.wait(COOLDOWN)
+        end
+    end
+end)
+
+-- ============================================================
+-- PART B: YHWACH TWEEN (có toggle)
+-- ============================================================
+task.spawn(function()
+    local CHECK_SLOW, CHECK_FAST = 5, 0.5
+    local TWEEN_DISTANCE, TWEEN_TIME = 20, 1
+
+    local tweenInfo = TweenInfo.new(TWEEN_TIME, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+    local currentTween, yhwachPresent = nil, false
+
+    local function stopTween()
+        if currentTween then
+            pcall(function() currentTween:Cancel() end)
+            currentTween = nil
+        end
+    end
+
+    while true do
+        if not State.Yhwach then
+            if yhwachPresent then
+                yhwachPresent = false
+                stopTween()
+                local ch = LocalPlayer.Character
+                local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+                if hum then hum.PlatformStand = false end
+                print("[Yhwach] Tắt bởi UI.")
+            end
+            task.wait(0.5)
+        else
+            local character = LocalPlayer.Character
+            local myRoot    = character and character:FindFirstChild("HumanoidRootPart")
+            local humanoid  = character and character:FindFirstChild("Humanoid")
+
+            refreshCache()
+            local yhwach = Cache.enemiesFolder and Cache.enemiesFolder:FindFirstChild("Yhwach")
+
+            local yhwachAlive = false
+            if yhwach then
+                local hum = yhwach:FindFirstChildOfClass("Humanoid")
+                yhwachAlive = (hum == nil) or (hum.Health > 0)
+            end
+
+            if myRoot and yhwach and yhwachAlive then
+                local targetRoot = yhwach:FindFirstChild("HumanoidRootPart")
+                    or yhwach.PrimaryPart
+                    or yhwach:FindFirstChild("Torso")
+                    or yhwach:FindFirstChild("UpperTorso")
+                if targetRoot then
+                    if not yhwachPresent then
+                        yhwachPresent = true
+                        print("[Yhwach] 👾 Xuất hiện -> tween 20 block.")
+                    end
+                    local backPosition = (targetRoot.CFrame * CFrame.new(0, 0, TWEEN_DISTANCE)).Position
+                    local goalCFrame   = CFrame.new(backPosition, targetRoot.Position)
+                    if humanoid then humanoid.PlatformStand = true end
+                    stopTween()
+                    currentTween = TweenService:Create(myRoot, tweenInfo, { CFrame = goalCFrame })
+                    currentTween:Play()
+                end
+            else
+                if yhwachPresent then
+                    yhwachPresent = false
+                    stopTween()
+                    print("[Yhwach] ❌ Biến mất / chết -> tắt tween.")
+                end
+                if humanoid then humanoid.PlatformStand = false end
+            end
+
+            task.wait(yhwachPresent and CHECK_FAST or CHECK_SLOW)
+        end
+    end
+end)
+
+-- ============================================================
+-- PART C: NPC + SPAWN BOSS + CHIHORA (có toggle)
+-- ============================================================
+task.spawn(function()
+    local Remotes   = ReplicatedStorage:WaitForChild("Remotes", 30)
+    local Events    = Remotes:WaitForChild("Events", 30)
+    local Functions = Remotes:WaitForChild("Functions", 30)
+
+    local GoldShopBuy = Events:WaitForChild("GoldShopBuy", 30)
+    local InputRemote = Functions:WaitForChild("Input", 30)
+
+    -- Mua Boss Ticket mỗi 3s (chỉ khi Chihora ON)
+    task.spawn(function()
+        while true do
+            if State.Chihora then
+                pcall(function() GoldShopBuy:FireServer("Boss Ticket", 100) end)
+            end
+            task.wait(3)
+        end
+    end)
+
+    -- Cấu hình
+    local TWEEN_SPEED      = 75
+    local ARRIVE_DIST      = 6
+    local BOSS_STANDOFF    = 10
+    local SPAWN_INTERVAL   = 0.75
+    local LOOP_WAIT        = 0.15
+    local NPC_RETWEEN_DIST = 100
+    local BOSS_TWEEN_CD    = 5
+
+    local lastCharacter     = nil
+    local currentTween      = nil
+    local npcTweenActive    = false
+    local lastSpawnAt       = 0
+    local lastBossTweenAt   = 0
+    local phase             = "IDLE"
+
+    local function stopTween()
+        if currentTween then
+            pcall(function() currentTween:Cancel() end)
+            currentTween = nil
+        end
+    end
+
+    local function tweenAtSpeed(hrp, targetCFrame, speed, onDone)
+        local dist = (hrp.Position - targetCFrame.Position).Magnitude
+        local duration = math.max(dist / speed, 0.05)
+        stopTween()
+        currentTween = TweenService:Create(
+            hrp, TweenInfo.new(duration, Enum.EasingStyle.Linear),
+            { CFrame = targetCFrame }
+        )
+        if onDone then
+            currentTween.Completed:Connect(function(state)
+                if state == Enum.PlaybackState.Completed then onDone() end
+            end)
+        end
+        currentTween:Play()
+    end
+
+    local function trySpawnBoss(now)
+        if now - lastSpawnAt < SPAWN_INTERVAL then return end
+        lastSpawnAt = now
+        task.spawn(function()
+            pcall(function()
+                InputRemote:InvokeServer("SpawnBoss", "PauPau Whisperer", "Chihora", "Extreme")
+            end)
+        end)
+    end
+
+    local function getNpcRoot()
+        local npc = Cache.npcsFolder and Cache.npcsFolder:FindFirstChild("PauPau Whisperer")
+        if not npc then return nil end
+        return npc:FindFirstChild("HumanoidRootPart")
+            or npc.PrimaryPart
+            or npc:FindFirstChild("Torso")
+            or npc:FindFirstChild("UpperTorso")
+    end
+
+    print("[PART C] Bắt đầu.")
+
+    while true do
+        if not State.Chihora then
+            -- Tắt: dừng tween, reset phase
+            if phase ~= "OFF" then
+                phase = "OFF"
+                stopTween()
+                npcTweenActive = false
+                print("[Chihora] Tắt bởi UI.")
+            end
+            task.wait(0.5)
+        else
+            local ok, err = pcall(function()
+                local char = LocalPlayer.Character
+                local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+
+                if char ~= lastCharacter then
+                    lastCharacter   = char
+                    npcTweenActive  = false
+                    lastBossTweenAt = 0
+                    phase           = "IDLE"
+                    stopTween()
+                    print("[PART C] 🔄 Character mới -> reset.")
+                end
+                if not hrp then return end
+
+                refreshCache()
+                local chihora = Cache.enemiesFolder and Cache.enemiesFolder:FindFirstChild("Chihora")
+                local chihoraAlive = false
+                if chihora then
+                    local hum = chihora:FindFirstChildOfClass("Humanoid")
+                    chihoraAlive = (hum == nil) or (hum.Health > 0)
+                end
+
+                if chihora and chihoraAlive then
+                    if phase ~= "TO_BOSS" then
+                        phase = "TO_BOSS"
+                        lastBossTweenAt = 0
+                        print("[Chihora] 👾 Xuất hiện -> tween boss mỗi 5s.")
+                    end
+                    local now = os.clock()
+                    if now - lastBossTweenAt >= BOSS_TWEEN_CD then
+                        lastBossTweenAt = now
+                        local enemyRoot = chihora:FindFirstChild("HumanoidRootPart") or chihora.PrimaryPart
+                        if enemyRoot then
+                            local myPos, enemyPos = hrp.Position, enemyRoot.Position
+                            local dx, dy, dz = myPos.X - enemyPos.X, myPos.Y - enemyPos.Y, myPos.Z - enemyPos.Z
+                            local mag = math.sqrt(dx*dx + dy*dy + dz*dz)
+                            local ux, uy, uz
+                            if mag < 0.5 then ux, uy, uz = 1, 0, 0
+                            else ux, uy, uz = dx/mag, dy/mag, dz/mag end
+                            local tx = enemyPos.X + ux * BOSS_STANDOFF
+                            local ty = enemyPos.Y + uy * BOSS_STANDOFF
+                            local tz = enemyPos.Z + uz * BOSS_STANDOFF
+                            local targetCF = CFrame.new(Vector3.new(tx, ty, tz), enemyPos)
+                            tweenAtSpeed(hrp, targetCF, TWEEN_SPEED)
+                        end
+                    end
+                else
+                    local npcRoot = getNpcRoot()
+                    if npcRoot then
+                        local npcPos = npcRoot.Position
+                        local myPos  = hrp.Position
+                        local dx, dy, dz = myPos.X - npcPos.X, myPos.Y - npcPos.Y, myPos.Z - npcPos.Z
+                        local dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+
+                        if dist >= NPC_RETWEEN_DIST and not npcTweenActive then
+                            npcTweenActive = true
+                            phase = "TO_NPC"
+                            local lookVec = Vector3.new(npcPos.X - myPos.X, npcPos.Y - myPos.Y, npcPos.Z - myPos.Z)
+                            if lookVec.Magnitude < 0.5 then lookVec = Vector3.new(1, 0, 0) end
+                            local targetCF = CFrame.new(npcPos, npcPos + lookVec)
+                            print(("[NPC] 🚶 Cách %.0f blocks -> tween @75."):format(dist))
+                            tweenAtSpeed(hrp, targetCF, TWEEN_SPEED, function()
+                                npcTweenActive = false
+                                print("[NPC] ✅ Đã tới NPC -> spam SpawnBoss.")
+                            end)
+                        elseif npcTweenActive then
+                            -- chờ tween xong
+                        else
+                            if phase ~= "SPAWNING" then
+                                phase = "SPAWNING"
+                                print("[NPC] 🎯 Ở NPC -> spam SpawnBoss.")
+                            end
+                            trySpawnBoss(os.clock())
+                        end
+                    end
+                end
+            end)
+            if not ok then warn("[PART C] Lỗi: " .. tostring(err)) end
+            task.wait(LOOP_WAIT)
+        end
+    end
+end)
+
+print("[COMBINED v6] GlobalBoss/Chihora/Yhwach + UI toggle + Weapon auto-equip + Cache")
