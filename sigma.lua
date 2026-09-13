@@ -1,5 +1,5 @@
 -- ============================================================
--- COMBINED v10.5 - FIX CONFLICT TWEEN B/C + SHARED TWEENHELPER
+-- COMBINED v10.6 - FOLLOW LOCK + FIX LOOKAT + KHÔNG CÚI MẶT
 -- ============================================================
 
 local Players           = game:GetService("Players")
@@ -27,7 +27,7 @@ local State = {
 local DashSpammer = (function()
     local remote       = nil
     local lastFireAt   = 0
-    local FIRE_INTERVAL = 0.05
+    local FIRE_INTERVAL = 0.04
     local enabled      = true
 
     local function getRemote()
@@ -50,9 +50,7 @@ local DashSpammer = (function()
         lastFireAt = now
         local r = getRemote()
         if not r then return end
-        pcall(function()
-            r:FireServer("Dash", cframe)
-        end)
+        pcall(function() r:FireServer("Dash", cframe) end)
     end
 
     return {
@@ -69,7 +67,7 @@ local function popTween()  inTweenRefs -= 1; if inTweenRefs < 0 then inTweenRefs
 task.spawn(function()
     while true do
         task.wait(0.03)
-        if State.DashBypass and inTweenRefs > 0 then
+        if State.DashBypass and (inTweenRefs > 0 or FollowLockActive) then
             local char = LocalPlayer.Character
             local hrp  = char and char:FindFirstChild("HumanoidRootPart")
             if hrp and hrp.Parent then
@@ -77,6 +75,90 @@ task.spawn(function()
             end
         end
     end
+end)
+
+-- ============================================================
+-- FOLLOW LOCK - Bám sau lưng enemy mỗi frame (không cúi mặt)
+-- ============================================================
+FollowLockActive = false
+
+local FollowLock = {
+    active = false,
+    target = nil,
+    offset = Vector3.zero,
+    yLock  = 0,
+}
+
+function FollowLock:activate(enemy, standoff)
+    local char = LocalPlayer.Character
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local enemyRoot = enemy:FindFirstChild("HumanoidRootPart")
+        or enemy.PrimaryPart
+        or enemy:FindFirstChild("Torso")
+        or enemy:FindFirstChild("UpperTorso")
+    if not enemyRoot then return end
+
+    local myPos    = hrp.Position
+    local enemyPos = enemyRoot.Position
+
+    -- Vector offset nằm ngang (bỏ Y)
+    local dx, dz = myPos.X - enemyPos.X, myPos.Z - enemyPos.Z
+    local magXZ  = math.sqrt(dx*dx + dz*dz)
+    local dir
+    if magXZ < 0.5 then
+        dir = Vector3.new(0, 0, 1)
+    else
+        dir = Vector3.new(dx/magXZ, 0, dz/magXZ)
+    end
+
+    -- Clamp khoảng cách ngang: 6..standoff*1.5
+    local dist = math.clamp(magXZ, 6, standoff * 1.5)
+
+    self.offset = dir * dist
+    self.yLock  = myPos.Y
+    self.target = enemy
+    self.active = true
+    FollowLockActive = true
+end
+
+function FollowLock:deactivate()
+    self.active = false
+    self.target = nil
+    FollowLockActive = false
+end
+
+RunService.Heartbeat:Connect(function()
+    if not FollowLock.active then return end
+
+    local enemy = FollowLock.target
+    if not enemy or not enemy.Parent then
+        FollowLock:deactivate()
+        return
+    end
+
+    local enemyRoot = enemy:FindFirstChild("HumanoidRootPart")
+        or enemy.PrimaryPart
+        or enemy:FindFirstChild("Torso")
+        or enemy:FindFirstChild("UpperTorso")
+    if not enemyRoot then return end
+
+    local char = LocalPlayer.Character
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local enemyPos   = enemyRoot.Position
+    local desiredPos = enemyPos + FollowLock.offset
+    desiredPos = Vector3.new(desiredPos.X, FollowLock.yLock, desiredPos.Z)
+
+    -- ✅ Nhìn NGANG, Y bằng nhau → không cúi, không ngửa
+    local lookAt = Vector3.new(enemyPos.X, desiredPos.Y, enemyPos.Z)
+    if (lookAt - desiredPos).Magnitude < 0.5 then return end
+
+    hrp.CFrame = CFrame.lookAt(desiredPos, lookAt)
+    hrp.AssemblyLinearVelocity  = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
 end)
 
 -- ============================================================
@@ -113,22 +195,14 @@ function TweenHelper:saveHome()
     end
 end
 
-function TweenHelper:clearHome()
-    self.home = nil
-end
+function TweenHelper:clearHome() self.home = nil end
 
 function TweenHelper:beginMove()
-    if not self.inMove then
-        self.inMove = true
-        pushTween()
-    end
+    if not self.inMove then self.inMove = true; pushTween() end
 end
 
 function TweenHelper:endMove()
-    if self.inMove then
-        self.inMove = false
-        popTween()
-    end
+    if self.inMove then self.inMove = false; popTween() end
 end
 
 function TweenHelper:cancel()
@@ -162,16 +236,15 @@ function TweenHelper:_move(targetCFrame, speed, onDone)
     local dist = (self.hrp.Position - targetCFrame.Position).Magnitude
 
     local function finish()
-        self.activeTween = nil       -- ✅ clear để isMoving trả về false
+        self.activeTween = nil
         self:endMove()
         if onDone then onDone() end
     end
 
     if dist < 0.5 then
-        local dur = MIN_DURATION
         local t = TweenService:Create(
             self.hrp,
-            TweenInfo.new(dur, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
+            TweenInfo.new(MIN_DURATION, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
             { CFrame = targetCFrame }
         )
         self.activeTween = t
@@ -236,11 +309,7 @@ function TweenHelper:goHome(speed, onDone)
     end)
 end
 
--- ============================================================
--- GLOBAL TWEEN HELPER (dùng chung cho PART B và PART C)
--- ============================================================
 local GlobalTweenH = nil
-
 local function getGlobalTweenH()
     local char = LocalPlayer.Character
     local hrp  = char and char:FindFirstChild("HumanoidRootPart")
@@ -252,7 +321,7 @@ local function getGlobalTweenH()
 end
 
 -- ============================================================
--- UI
+-- UI (giữ nguyên)
 -- ============================================================
 local pg = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -279,7 +348,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 44)
 title.BackgroundColor3 = Color3.fromRGB(35, 35, 46)
 title.BorderSizePixel = 0
-title.Text = "⚙  AUTO CONTROLS v10.5"
+title.Text = "⚙  AUTO CONTROLS v10.6"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 18
@@ -360,7 +429,6 @@ makeToggle("Yhwach",       "Yhwach",      3)
 makeToggle("Auto Attack",  "AutoAttack",  4)
 makeToggle("Dash Bypass",  "DashBypass",  5)
 
--- ===== SPAWN INTERVAL =====
 local intFrame = Instance.new("Frame")
 intFrame.Size = UDim2.new(1, -24, 0, 96)
 intFrame.Position = UDim2.new(0, 12, 0, 286)
@@ -425,7 +493,6 @@ local function applyInterval()
         State.SpawnInterval = n
         intBox.TextColor3 = Color3.fromRGB(120, 255, 150)
         applyBtn.BackgroundColor3 = Color3.fromRGB(60, 180, 100)
-        print(("[UI] SpawnInterval = %.3fs"):format(n))
         task.delay(0.3, function()
             intBox.TextColor3 = Color3.fromRGB(255, 255, 255)
             applyBtn.BackgroundColor3 = Color3.fromRGB(60, 110, 180)
@@ -433,7 +500,6 @@ local function applyInterval()
     else
         intBox.TextColor3 = Color3.fromRGB(255, 110, 110)
         applyBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
-        warn("[UI] SpawnInterval không hợp lệ (0 < x <= 60).")
         task.delay(0.6, function()
             intBox.TextColor3 = Color3.fromRGB(255, 255, 255)
             applyBtn.BackgroundColor3 = Color3.fromRGB(60, 110, 180)
@@ -444,7 +510,6 @@ end
 applyBtn.MouseButton1Click:Connect(applyInterval)
 intBox.FocusLost:Connect(function() applyInterval() end)
 
--- ===== WEAPON =====
 local wTitle = Instance.new("TextLabel")
 wTitle.Size = UDim2.new(1, -24, 0, 26)
 wTitle.Position = UDim2.new(0, 12, 0, 392)
@@ -535,10 +600,8 @@ local function refreshWeapons()
         btn.MouseButton1Click:Connect(function()
             if State.Weapon == name then
                 State.Weapon = nil
-                print("[UI] Weapon OFF")
             else
                 State.Weapon = name
-                print("[UI] Weapon = " .. name)
             end
             refreshWeapons()
         end)
@@ -555,10 +618,7 @@ task.spawn(function()
     end
 end)
 task.spawn(function()
-    while true do
-        task.wait(2)
-        pcall(refreshWeapons)
-    end
+    while true do task.wait(2); pcall(refreshWeapons) end
 end)
 refreshWeapons()
 
@@ -603,16 +663,11 @@ task.spawn(function()
         end
 
         if typeof(mouse1click) == "function" then
-            pcall(mouse1click)
-            return true
+            pcall(mouse1click); return true
         end
 
         if typeof(mouse1press) == "function" and typeof(mouse1release) == "function" then
-            pcall(function()
-                mouse1press()
-                task.wait(0.02)
-                mouse1release()
-            end)
+            pcall(function() mouse1press(); task.wait(0.02); mouse1release() end)
             return true
         end
 
@@ -624,7 +679,6 @@ task.spawn(function()
             end)
             return true
         end
-
         return false
     end
 
@@ -669,7 +723,6 @@ local function refreshCache(force)
     Cache.npcsFolder    = Workspace:FindFirstChild("NPCs")
 end
 
--- Helper check Chihora đang active không (dùng chung cho B và C)
 local function isChihoraActive()
     if not State.Chihora then return false end
     refreshCache()
@@ -699,10 +752,7 @@ task.spawn(function()
     local OfferPanel  = prompt:WaitForChild("OfferPanel", 10)
     local PartyPanel  = prompt:WaitForChild("PartyPanel", 10)
     local StatusPanel = prompt:WaitForChild("StatusPanel", 10)
-    if not (OfferPanel and PartyPanel and StatusPanel) then
-        warn("[AutoJoin] Thiếu panel → thoát")
-        return
-    end
+    if not (OfferPanel and PartyPanel and StatusPanel) then return end
 
     local OfferJoin   = findChild(OfferPanel,  "ButtonHolder", "JoinButton")
     local PartyJoin   = findChild(PartyPanel,  "ButtonHolder", "JoinButton")
@@ -733,16 +783,6 @@ task.spawn(function()
             if firesignal then
                 firesignal(btn.MouseButton1Click)
                 firesignal(btn.Activated)
-            end
-        end)
-        pcall(function()
-            if btn:IsA("GuiButton") then
-                local vim = game:GetService("VirtualInputManager")
-                if vim then
-                    local pos = btn.AbsolutePosition + btn.AbsoluteSize / 2
-                    vim:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 0)
-                    vim:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 0)
-                end
             end
         end)
         return true
@@ -805,28 +845,28 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- PART B: YHWACH (nhường PART C khi có Chihora)
+-- PART B: YHWACH (FOLLOW LOCK)
 -- ============================================================
 task.spawn(function()
     local CHECK_SLOW, CHECK_FAST = 5, 0.5
     local MOVE_SPEED   = 55
     local RETURN_SPEED = 45
-    local STANDOFF     = 14
+    local STANDOFF     = 12
     local FARM_RADIUS  = 22
 
     local yhwachOn = false
 
     while true do
-        local tweenH = getGlobalTweenH()
-        local chihoraBusy = isChihoraActive()   -- ✅ nếu Chihora đang active, PART B nhường
+        local tweenH      = getGlobalTweenH()
+        local chihoraBusy = isChihoraActive()
 
         if not State.Yhwach or chihoraBusy then
             if yhwachOn then
                 yhwachOn = false
+                FollowLock:deactivate()
                 local char = LocalPlayer.Character
                 local humanoid = char and char:FindFirstChildOfClass("Humanoid")
                 if humanoid then humanoid.PlatformStand = false end
-                -- Không goHome — để PART C hoặc toggle tắt xử lý
             end
             task.wait(chihoraBusy and 0.3 or 0.5)
         elseif tweenH then
@@ -847,9 +887,11 @@ task.spawn(function()
                 if targetRoot then
                     tweenH:saveHome()
                     yhwachOn = true
+
                     local char = LocalPlayer.Character
                     local humanoid = char and char:FindFirstChildOfClass("Humanoid")
-                    if humanoid then humanoid.PlatformStand = true end
+                    -- ✅ KHÔNG dùng PlatformStand khi ở gần → animation Idle/Walk chạy bình thường
+                    if humanoid then humanoid.PlatformStand = false end
 
                     local myPos    = tweenH.hrp.Position
                     local enemyPos = targetRoot.Position
@@ -857,6 +899,9 @@ task.spawn(function()
                     local dist = math.sqrt(dx*dx + dy*dy + dz*dz)
 
                     if dist > FARM_RADIUS then
+                        -- Xa → tắt lock, tween lại
+                        if FollowLock.active then FollowLock:deactivate() end
+
                         local ux, uy, uz
                         if dist < 0.5 then ux, uy, uz = 1, 0, 0
                         else ux, uy, uz = dx/dist, dy/dist, dz/dist end
@@ -866,16 +911,26 @@ task.spawn(function()
                             enemyPos.Y + uy * STANDOFF,
                             enemyPos.Z + uz * STANDOFF
                         )
-                        local goalCF = CFrame.new(targetPos, enemyPos)
+
+                        -- ✅ FIX CÚI MẶT: lookAt có cùng Y với targetPos → nhìn ngang
+                        local lookAt = Vector3.new(enemyPos.X, targetPos.Y, enemyPos.Z)
+                        local goalCF = CFrame.new(targetPos, lookAt)
 
                         if not tweenH:isMoving() then
                             tweenH:moveToTarget(goalCF, MOVE_SPEED)
+                        end
+                    else
+                        -- Trong bán kính → bật FollowLock
+                        if not FollowLock.active then
+                            tweenH:abort()
+                            FollowLock:activate(yhwach, STANDOFF)
                         end
                     end
                 end
             else
                 if yhwachOn then
                     yhwachOn = false
+                    FollowLock:deactivate()
                     local char = LocalPlayer.Character
                     local humanoid = char and char:FindFirstChildOfClass("Humanoid")
                     if humanoid then humanoid.PlatformStand = false end
@@ -945,14 +1000,14 @@ task.spawn(function()
     while true do
         if not State.Chihora then
             if phase ~= "OFF" then
-                phase       = "OFF"
+                phase = "OFF"
                 lostEnemyAt = nil
+                FollowLock:deactivate()
                 local tweenH = getGlobalTweenH()
                 if tweenH then
                     local char = LocalPlayer.Character
                     local humanoid = char and char:FindFirstChildOfClass("Humanoid")
                     if humanoid then humanoid.PlatformStand = false end
-                    -- ✅ chỉ goHome khi thực sự tắt Chihora VÀ không bật Yhwach
                     if not State.Yhwach and tweenH.home then
                         tweenH:goHome(RETURN_SPEED)
                     end
@@ -963,7 +1018,6 @@ task.spawn(function()
             local ok, err = pcall(function()
                 local char = LocalPlayer.Character
                 local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-
                 local tweenH = getGlobalTweenH()
                 if not tweenH then return end
 
@@ -984,6 +1038,9 @@ task.spawn(function()
                 end
 
                 if chihora and chihoraAlive then
+                    -- ✅ Chihora active → tắt FollowLock của Yhwach
+                    if FollowLock.active then FollowLock:deactivate() end
+
                     lostEnemyAt = nil
                     tweenH:saveHome()
                     phase = "TO_BOSS"
@@ -1004,7 +1061,9 @@ task.spawn(function()
                                 enemyPos.Y + uy * BOSS_STANDOFF,
                                 enemyPos.Z + uz * BOSS_STANDOFF
                             )
-                            local targetCF = CFrame.new(targetPos, enemyPos)
+                            -- ✅ lookAt ngang
+                            local lookAt = Vector3.new(enemyPos.X, targetPos.Y, enemyPos.Z)
+                            local targetCF = CFrame.new(targetPos, lookAt)
 
                             if not tweenH:isMoving() then
                                 tweenH:moveToTarget(targetCF, MOVE_SPEED)
@@ -1047,4 +1106,4 @@ task.spawn(function()
     end
 end)
 
-print("[COMBINED v10.5] GlobalBoss + Chihora + Yhwach + AutoAttack + Weapon + SmoothTween + DashBypass + SharedTweenHelper")
+print("[COMBINED v10.6] GlobalBoss + Chihora + Yhwach(FollowLock) + AutoAttack + Weapon + SmoothTween + DashBypass")
