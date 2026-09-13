@@ -1,11 +1,12 @@
 -- ============================================================
--- COMBINED v8 - UI TO RÕ, CÓ Ô SPAWN INTERVAL
+-- COMBINED v10 - AUTO ATTACK + FIX JOIN BUTTON + DEBUG
 -- ============================================================
 
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService      = game:GetService("TweenService")
 local Workspace         = game:GetService("Workspace")
+local RunService        = game:GetService("RunService")
 local LocalPlayer       = Players.LocalPlayer
 
 -- ============================================================
@@ -15,12 +16,15 @@ local State = {
     GlobalBoss    = true,
     Chihora       = true,
     Yhwach        = true,
+    AutoAttack    = false,   -- ✅ Toggle mới
+    AttackRate    = 0.1,     -- giây/lần chém
     Weapon        = nil,
     SpawnInterval = 0.75,
+    DebugMode     = true,
 }
 
 -- ============================================================
--- UI  (TO HƠN, CHỮ RÕ)
+-- UI
 -- ============================================================
 local pg = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -30,10 +34,9 @@ screenGui.ResetOnSpawn = false
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.Parent = pg
 
--- ===== KHUNG CHÍNH (TO) =====
 local main = Instance.new("Frame")
-main.Size = UDim2.new(0, 340, 0, 560)
-main.Position = UDim2.new(0, 30, 0, 80)
+main.Size = UDim2.new(0, 340, 0, 610)
+main.Position = UDim2.new(0, 30, 0, 60)
 main.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
 main.BorderSizePixel = 0
 main.Active = true
@@ -44,12 +47,11 @@ do
     local s = Instance.new("UIStroke"); s.Color = Color3.fromRGB(80, 80, 100); s.Thickness = 2; s.Parent = main
 end
 
--- ===== TITLE =====
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 44)
 title.BackgroundColor3 = Color3.fromRGB(35, 35, 46)
 title.BorderSizePixel = 0
-title.Text = "⚙  AUTO CONTROLS"
+title.Text = "⚙  AUTO CONTROLS v10"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 18
@@ -58,9 +60,9 @@ do
     local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 12); c.Parent = title
 end
 
--- ===== TOGGLES =====
+-- ===== TOGGLES (4 cái) =====
 local toggleHolder = Instance.new("Frame")
-toggleHolder.Size = UDim2.new(1, -24, 0, 132)
+toggleHolder.Size = UDim2.new(1, -24, 0, 176)
 toggleHolder.Position = UDim2.new(0, 12, 0, 54)
 toggleHolder.BackgroundTransparency = 1
 toggleHolder.Parent = main
@@ -125,11 +127,12 @@ end
 makeToggle("Global Boss", "GlobalBoss", 1)
 makeToggle("Chihora",     "Chihora",    2)
 makeToggle("Yhwach",      "Yhwach",     3)
+makeToggle("Auto Attack", "AutoAttack", 4)   -- ✅ Toggle mới
 
--- ===== SPAWN INTERVAL (TO, NỔI BẬT) =====
+-- ===== SPAWN INTERVAL =====
 local intFrame = Instance.new("Frame")
 intFrame.Size = UDim2.new(1, -24, 0, 96)
-intFrame.Position = UDim2.new(0, 12, 0, 194)
+intFrame.Position = UDim2.new(0, 12, 0, 240)
 intFrame.BackgroundColor3 = Color3.fromRGB(32, 32, 42)
 intFrame.BorderSizePixel = 0
 intFrame.Parent = main
@@ -149,7 +152,6 @@ intLabel.Font = Enum.Font.GothamBold
 intLabel.TextSize = 14
 intLabel.Parent = intFrame
 
--- Hàng dưới: TextBox + nút Apply
 local intBox = Instance.new("TextBox")
 intBox.Size = UDim2.new(1, -110, 0, 42)
 intBox.Position = UDim2.new(0, 10, 0, 42)
@@ -209,12 +211,12 @@ local function applyInterval()
 end
 
 applyBtn.MouseButton1Click:Connect(applyInterval)
-intBox.FocusLost:Connect(function(enterPressed) applyInterval() end)
+intBox.FocusLost:Connect(function() applyInterval() end)
 
 -- ===== WEAPON =====
 local wTitle = Instance.new("TextLabel")
 wTitle.Size = UDim2.new(1, -24, 0, 26)
-wTitle.Position = UDim2.new(0, 12, 0, 300)
+wTitle.Position = UDim2.new(0, 12, 0, 346)
 wTitle.BackgroundTransparency = 1
 wTitle.Text = "🔫  Weapon (auto equip)"
 wTitle.TextXAlignment = Enum.TextXAlignment.Left
@@ -225,7 +227,7 @@ wTitle.Parent = main
 
 local weaponList = Instance.new("ScrollingFrame")
 weaponList.Size = UDim2.new(1, -24, 0, 220)
-weaponList.Position = UDim2.new(0, 12, 0, 330)
+weaponList.Position = UDim2.new(0, 12, 0, 376)
 weaponList.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
 weaponList.BorderSizePixel = 0
 weaponList.ScrollBarThickness = 6
@@ -354,6 +356,65 @@ task.spawn(function()
 end)
 
 -- ============================================================
+-- ✅ PART MỚI: AUTO ATTACK
+-- ============================================================
+task.spawn(function()
+    local vim = game:GetService("VirtualInputManager")
+
+    -- Danh sách hàm attack theo thứ tự ưu tiên
+    local function doOneAttack()
+        local char = LocalPlayer.Character
+        if not char then return false end
+
+        -- Ưu tiên 1: Activate tool trực tiếp (an toàn nhất, không gây nhảy chuột)
+        local tool = char:FindFirstChildOfClass("Tool")
+        if tool then
+            local ok = pcall(function() tool:Activate() end)
+            if ok then return true end
+        end
+
+        -- Ưu tiên 2: mouse1click (executor function, phổ biến)
+        if typeof(mouse1click) == "function" then
+            pcall(mouse1click)
+            return true
+        end
+
+        -- Ưu tiên 3: mouse1press + mouse1release
+        if typeof(mouse1press) == "function" and typeof(mouse1release) == "function" then
+            pcall(function()
+                mouse1press()
+                task.wait(0.02)
+                mouse1release()
+            end)
+            return true
+        end
+
+        -- Ưu tiên 4: VirtualInputManager (yêu cầu executor uy tín)
+        if vim then
+            pcall(function()
+                vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+                task.wait(0.02)
+                vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+            end)
+            return true
+        end
+
+        return false
+    end
+
+    while true do
+        if State.AutoAttack then
+            doOneAttack()
+            local rate = State.AttackRate or 0.1
+            if rate < 0.03 then rate = 0.03 end
+            task.wait(rate)
+        else
+            task.wait(0.3)
+        end
+    end
+end)
+
+-- ============================================================
 -- BỘ DỌN RÁC
 -- ============================================================
 task.spawn(function()
@@ -383,7 +444,7 @@ local function refreshCache(force)
 end
 
 -- ============================================================
--- PART A: AUTO GLOBAL BOSS
+-- PART A: AUTO GLOBAL BOSS (đã fix)
 -- ============================================================
 task.spawn(function()
     local prompt = pg:WaitForChild("GlobalBossPrompt", 30)
@@ -402,7 +463,10 @@ task.spawn(function()
     local OfferPanel  = prompt:WaitForChild("OfferPanel", 10)
     local PartyPanel  = prompt:WaitForChild("PartyPanel", 10)
     local StatusPanel = prompt:WaitForChild("StatusPanel", 10)
-    if not (OfferPanel and PartyPanel and StatusPanel) then return end
+    if not (OfferPanel and PartyPanel and StatusPanel) then
+        warn("[AutoJoin] Thiếu panel → thoát")
+        return
+    end
 
     local OfferJoin   = findChild(OfferPanel,  "ButtonHolder", "JoinButton")
     local PartyJoin   = findChild(PartyPanel,  "ButtonHolder", "JoinButton")
@@ -410,20 +474,69 @@ task.spawn(function()
     local StatusLabel = findChild(StatusPanel, "StatusLabel")
     local TitleLabel  = findChild(StatusPanel, "TitleLabel")
 
+    print("[AutoJoin] Khởi tạo:")
+    print("  - OfferJoin  =", OfferJoin and OfferJoin:GetFullName() or "NIL")
+    print("  - PartyJoin  =", PartyJoin and PartyJoin:GetFullName() or "NIL")
+    print("  - RefreshBtn =", RefreshBtn and RefreshBtn:GetFullName() or "NIL")
+    print("  - StatusLabel=", StatusLabel and StatusLabel:GetFullName() or "NIL")
+
     local COOLDOWN, JOIN_DEBOUNCE, REFRESH_DEBOUNCE = 0.5, 1.0, 1.5
     local queued = false
     local lastJoinAt, lastRefreshAt = 0, 0
+    local lastLogAt = 0
 
     local function contains(t, kw)
         if type(t) ~= "string" or type(kw) ~= "string" then return false end
         return string.find(string.lower(t), string.lower(kw), 1, true) ~= nil
     end
-    local function fireButton(btn)
-        if not btn or not btn.Visible or btn.Active == false then return false end
-        return pcall(function()
-            if btn:IsA("TextButton") or btn:IsA("ImageButton") then btn:Activated() end
+
+    local function fireButton(btn, tag)
+        if not btn then
+            print(("[Fire:%s] btn = nil"):format(tag or "?"))
+            return false
+        end
+        if not btn.Visible then
+            print(("[Fire:%s] btn KHÔNG Visible"):format(tag or "?"))
+            return false
+        end
+
+        pcall(function()
+            if btn:IsA("TextButton") or btn:IsA("ImageButton") then
+                btn:Activated()
+            end
         end)
+        pcall(function()
+            if btn:IsA("TextButton") or btn:IsA("ImageButton") then
+                btn.MouseButton1Click:Fire()
+            end
+        end)
+        pcall(function()
+            if btn:IsA("TextButton") or btn:IsA("ImageButton") then
+                btn.MouseButton1Down:Fire()
+                btn.MouseButton1Up:Fire()
+            end
+        end)
+        pcall(function()
+            if firesignal then
+                firesignal(btn.MouseButton1Click)
+                firesignal(btn.Activated)
+            end
+        end)
+        pcall(function()
+            if btn:IsA("GuiButton") then
+                local vim = game:GetService("VirtualInputManager")
+                if vim then
+                    local pos = btn.AbsolutePosition + btn.AbsoluteSize / 2
+                    vim:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 0)
+                    vim:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 0)
+                end
+            end
+        end)
+
+        print(("[Fire:%s] Đã fire nút %s"):format(tag or "?", btn.Name))
+        return true
     end
+
     local ERR = {"GlobalBoss service is unavailable","Try again","unavailable","error","failed","unable","retry"}
     local function isErr(t)
         if type(t) ~= "string" then return false end
@@ -435,6 +548,8 @@ task.spawn(function()
     local function isOk(t)
         return contains(t, "queued for the GlobalBoss") and contains(t, "Parties will never be split")
     end
+
+    print("[AutoJoin] Bắt đầu vòng lặp...")
 
     while true do
         if not State.GlobalBoss then
@@ -452,13 +567,24 @@ task.spawn(function()
                 StatusLabel = findChild(StatusPanel, "StatusLabel")
                 TitleLabel  = findChild(StatusPanel, "TitleLabel")
             end
+
             local now = os.clock()
             local statusText = (StatusLabel and StatusLabel.Text) or ""
             local titleText  = (TitleLabel  and TitleLabel.Text)  or ""
 
+            if State.DebugMode and (now - lastLogAt) > 2 then
+                lastLogAt = now
+                print(("[Debug] Status='%s' | queued=%s | OfferJoin.V=%s A=%s"):format(
+                    statusText, tostring(queued),
+                    tostring(OfferJoin and OfferJoin.Visible),
+                    tostring(OfferJoin and OfferJoin.Active)))
+            end
+
             if isOk(statusText) then
+                if not queued then print("[AutoJoin] ✅ ĐÃ VÀO QUEUE!") end
                 queued = true
             else
+                if queued then print("[AutoJoin] 🔄 Queue mất, quay lại join.") end
                 queued = false
             end
 
@@ -467,16 +593,18 @@ task.spawn(function()
 
             if hasErr and RefreshBtn and RefreshBtn.Visible and (now - lastRefreshAt) > REFRESH_DEBOUNCE then
                 lastRefreshAt = now
-                fireButton(RefreshBtn)
+                print(("[AutoJoin] ⚠️ Lỗi (%s) → Refresh"):format(tostring(kw)))
+                fireButton(RefreshBtn, "Refresh")
             end
 
             if not queued and (now - lastJoinAt) > JOIN_DEBOUNCE then
-                if OfferJoin and OfferJoin.Visible and OfferJoin.Active ~= false then
-                    if fireButton(OfferJoin) then lastJoinAt = now end
-                elseif PartyJoin and PartyJoin.Visible and PartyJoin.Active ~= false then
-                    if fireButton(PartyJoin) then lastJoinAt = now end
+                if OfferJoin and OfferJoin.Visible then
+                    if fireButton(OfferJoin, "OfferJoin") then lastJoinAt = now end
+                elseif PartyJoin and PartyJoin.Visible then
+                    if fireButton(PartyJoin, "PartyJoin") then lastJoinAt = now end
                 end
             end
+
             task.wait(COOLDOWN)
         end
     end
@@ -705,4 +833,4 @@ task.spawn(function()
     end
 end)
 
-print("[COMBINED v8] UI to rõ + SpawnInterval + Weapon + Cache")
+print("[COMBINED v10] Đã chạy: GlobalBoss + Chihora + Yhwach + AutoAttack + Weapon + Cache")
