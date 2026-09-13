@@ -1,8 +1,8 @@
 -- ============================================================
--- COMBINED v6
---  UI Toggle: GlobalBoss / Chihora / Yhwach
---  Weapon Auto-Equip (từ Backpack, giữ mãi kể cả respawn)
---  Cache/Memory Cleanup
+-- COMBINED v7
+--  UI: GlobalBoss / Chihora / Yhwach + Weapon + Spawn Interval
+--  Tween NPC 1 lần / re-tween khi cách >= 100
+--  Tween boss mỗi 5s
 -- ============================================================
 
 local Players           = game:GetService("Players")
@@ -12,13 +12,14 @@ local Workspace         = game:GetService("Workspace")
 local LocalPlayer       = Players.LocalPlayer
 
 -- ============================================================
--- STATE (UI điều khiển)
+-- STATE
 -- ============================================================
 local State = {
-    GlobalBoss = true,
-    Chihora    = true,
-    Yhwach     = true,
-    Weapon     = nil,   -- tên Tool muốn luôn equip
+    GlobalBoss    = true,
+    Chihora       = true,
+    Yhwach        = true,
+    Weapon        = nil,
+    SpawnInterval = 0.75,   -- ✅ giây giữa mỗi lần spam SpawnBoss
 }
 
 -- ============================================================
@@ -33,7 +34,7 @@ screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.Parent = pg
 
 local main = Instance.new("Frame")
-main.Size = UDim2.new(0, 220, 0, 330)
+main.Size = UDim2.new(0, 230, 0, 410)
 main.Position = UDim2.new(0, 20, 0, 100)
 main.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
 main.BorderSizePixel = 0
@@ -49,7 +50,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 32)
 title.BackgroundColor3 = Color3.fromRGB(32, 32, 40)
 title.BorderSizePixel = 0
-title.Text = "⚙  AUTO CONTROLS"
+title.Text = "⚙  AUTO CONTROLS v7"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 13
@@ -125,10 +126,60 @@ makeToggle("Global Boss", "GlobalBoss", 1)
 makeToggle("Chihora",     "Chihora",    2)
 makeToggle("Yhwach",      "Yhwach",     3)
 
+-- ---------- SPAWN INTERVAL ----------
+local intLabel = Instance.new("TextLabel")
+intLabel.Size = UDim2.new(1, -20, 0, 20)
+intLabel.Position = UDim2.new(0, 10, 0, 150)
+intLabel.BackgroundTransparency = 1
+intLabel.Text = "⏱  Spawn Interval (giây)"
+intLabel.TextXAlignment = Enum.TextXAlignment.Left
+intLabel.TextColor3 = Color3.fromRGB(200, 200, 210)
+intLabel.Font = Enum.Font.GothamBold
+intLabel.TextSize = 12
+intLabel.Parent = main
+
+local intBox = Instance.new("TextBox")
+intBox.Size = UDim2.new(1, -20, 0, 28)
+intBox.Position = UDim2.new(0, 10, 0, 172)
+intBox.BackgroundColor3 = Color3.fromRGB(32, 32, 40)
+intBox.BorderSizePixel = 0
+intBox.Text = tostring(State.SpawnInterval)
+intBox.PlaceholderText = "vd: 0.1 hoặc 1"
+intBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+intBox.PlaceholderColor3 = Color3.fromRGB(140, 140, 150)
+intBox.Font = Enum.Font.GothamBold
+intBox.TextSize = 13
+intBox.ClearTextOnFocus = false
+intBox.Parent = main
+do
+    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 6); c.Parent = intBox
+    local p = Instance.new("UIPadding")
+    p.PaddingLeft = UDim.new(0, 8)
+    p.Parent = intBox
+end
+
+local function applyInterval()
+    local n = tonumber(intBox.Text)
+    if n and n > 0 and n <= 60 then
+        State.SpawnInterval = n
+        intBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+        print(("[UI] SpawnInterval = %.3fs"):format(n))
+    else
+        intBox.TextColor3 = Color3.fromRGB(255, 120, 120)
+        warn("[UI] SpawnInterval không hợp lệ (0 < x <= 60).")
+    end
+end
+
+intBox.FocusLost:Connect(function()
+    applyInterval()
+    -- chuẩn hoá hiển thị
+    intBox.Text = tostring(State.SpawnInterval)
+end)
+
 -- ---------- WEAPON LIST ----------
 local wTitle = Instance.new("TextLabel")
 wTitle.Size = UDim2.new(1, -20, 0, 22)
-wTitle.Position = UDim2.new(0, 10, 0, 150)
+wTitle.Position = UDim2.new(0, 10, 0, 210)
 wTitle.BackgroundTransparency = 1
 wTitle.Text = "🔫 Weapon (auto equip)"
 wTitle.TextXAlignment = Enum.TextXAlignment.Left
@@ -138,8 +189,8 @@ wTitle.TextSize = 12
 wTitle.Parent = main
 
 local weaponList = Instance.new("ScrollingFrame")
-weaponList.Size = UDim2.new(1, -20, 0, 148)
-weaponList.Position = UDim2.new(0, 10, 0, 174)
+weaponList.Size = UDim2.new(1, -20, 0, 158)
+weaponList.Position = UDim2.new(0, 10, 0, 234)
 weaponList.BackgroundColor3 = Color3.fromRGB(32, 32, 40)
 weaponList.BorderSizePixel = 0
 weaponList.ScrollBarThickness = 4
@@ -225,7 +276,6 @@ local function refreshWeapons()
     weaponList.CanvasSize = UDim2.new(0, 0, 0, weaponList.UIListLayout.AbsoluteContentSize.Y + 10)
 end
 
--- theo dõi backpack thay đổi
 task.spawn(function()
     local bp = LocalPlayer:WaitForChild("Backpack", 30)
     if bp then
@@ -242,7 +292,7 @@ end)
 refreshWeapons()
 
 -- ============================================================
--- WEAPON AUTO-EQUIP (kể cả khi respawn/chết)
+-- WEAPON AUTO-EQUIP
 -- ============================================================
 task.spawn(function()
     while true do
@@ -295,7 +345,7 @@ local function refreshCache(force)
 end
 
 -- ============================================================
--- PART A: AUTO GLOBAL BOSS (có toggle)
+-- PART A: AUTO GLOBAL BOSS
 -- ============================================================
 task.spawn(function()
     local prompt = pg:WaitForChild("GlobalBossPrompt", 30)
@@ -365,12 +415,8 @@ task.spawn(function()
             task.wait(0.5)
         else
             if not prompt or not prompt.Parent then
-                print("[AutoJoin] GUI mất, chờ tạo lại...")
                 prompt = pg:WaitForChild("GlobalBossPrompt", 30)
-                if not prompt then
-                    print("[AutoJoin] Không có GUI, dừng.")
-                    break
-                end
+                if not prompt then break end
                 OfferPanel  = prompt:WaitForChild("OfferPanel", 10)
                 PartyPanel  = prompt:WaitForChild("PartyPanel", 10)
                 StatusPanel = prompt:WaitForChild("StatusPanel", 10)
@@ -401,33 +447,23 @@ task.spawn(function()
             if not hasErr then hasErr, kw = isErrorText(titleText) end
 
             if hasErr then
-                if queued then queued = false; print("[AutoJoin] ⚠️ Lỗi sau queue, reset.") end
+                if queued then queued = false end
                 if RefreshBtn and RefreshBtn.Visible and (now - lastRefreshAt) > REFRESH_DEBOUNCE then
                     lastRefreshAt = now
                     fireButton(RefreshBtn)
-                    print(("[AutoJoin] ⚠️ Lỗi (%s) -> Refresh."):format(tostring(kw)))
                 end
             end
 
             if not queued and (now - lastJoinAt) > JOIN_DEBOUNCE then
                 if OfferJoin and OfferJoin.Visible and OfferJoin.Active ~= false then
-                    if fireButton(OfferJoin) then
-                        lastJoinAt = now
-                        print("[AutoJoin] 👉 Bấm OfferPanel.JoinButton")
-                    end
+                    if fireButton(OfferJoin) then lastJoinAt = now end
                 elseif PartyJoin and PartyJoin.Visible and PartyJoin.Active ~= false then
-                    if fireButton(PartyJoin) then
-                        lastJoinAt = now
-                        print("[AutoJoin] 👉 Bấm PartyPanel.JoinButton")
-                    end
+                    if fireButton(PartyJoin) then lastJoinAt = now end
                 end
             end
 
             local state = queued and "QUEUED" or (hasErr and "ERROR" or "TRYING")
-            if state ~= lastStateLog then
-                lastStateLog = state
-                print(("[AutoJoin] Trạng thái: %s | Status='%s'"):format(state, statusText))
-            end
+            if state ~= lastStateLog then lastStateLog = state end
 
             task.wait(COOLDOWN)
         end
@@ -435,7 +471,7 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- PART B: YHWACH TWEEN (có toggle)
+-- PART B: YHWACH TWEEN
 -- ============================================================
 task.spawn(function()
     local CHECK_SLOW, CHECK_FAST = 5, 0.5
@@ -459,7 +495,6 @@ task.spawn(function()
                 local ch = LocalPlayer.Character
                 local hum = ch and ch:FindFirstChildOfClass("Humanoid")
                 if hum then hum.PlatformStand = false end
-                print("[Yhwach] Tắt bởi UI.")
             end
             task.wait(0.5)
         else
@@ -484,7 +519,7 @@ task.spawn(function()
                 if targetRoot then
                     if not yhwachPresent then
                         yhwachPresent = true
-                        print("[Yhwach] 👾 Xuất hiện -> tween 20 block.")
+                        print("[Yhwach] 👾 Xuất hiện.")
                     end
                     local backPosition = (targetRoot.CFrame * CFrame.new(0, 0, TWEEN_DISTANCE)).Position
                     local goalCFrame   = CFrame.new(backPosition, targetRoot.Position)
@@ -497,7 +532,6 @@ task.spawn(function()
                 if yhwachPresent then
                     yhwachPresent = false
                     stopTween()
-                    print("[Yhwach] ❌ Biến mất / chết -> tắt tween.")
                 end
                 if humanoid then humanoid.PlatformStand = false end
             end
@@ -508,7 +542,7 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- PART C: NPC + SPAWN BOSS + CHIHORA (có toggle)
+-- PART C: NPC + SPAWN BOSS + CHIHORA
 -- ============================================================
 task.spawn(function()
     local Remotes   = ReplicatedStorage:WaitForChild("Remotes", 30)
@@ -518,7 +552,6 @@ task.spawn(function()
     local GoldShopBuy = Events:WaitForChild("GoldShopBuy", 30)
     local InputRemote = Functions:WaitForChild("Input", 30)
 
-    -- Mua Boss Ticket mỗi 3s (chỉ khi Chihora ON)
     task.spawn(function()
         while true do
             if State.Chihora then
@@ -528,11 +561,9 @@ task.spawn(function()
         end
     end)
 
-    -- Cấu hình
     local TWEEN_SPEED      = 75
     local ARRIVE_DIST      = 6
     local BOSS_STANDOFF    = 10
-    local SPAWN_INTERVAL   = 0.75
     local LOOP_WAIT        = 0.15
     local NPC_RETWEEN_DIST = 100
     local BOSS_TWEEN_CD    = 5
@@ -567,8 +598,11 @@ task.spawn(function()
         currentTween:Play()
     end
 
+    -- ✅ Dùng State.SpawnInterval (đọc mỗi lần gọi)
     local function trySpawnBoss(now)
-        if now - lastSpawnAt < SPAWN_INTERVAL then return end
+        local interval = State.SpawnInterval or 0.75
+        if interval < 0.05 then interval = 0.05 end  -- sàn an toàn
+        if now - lastSpawnAt < interval then return end
         lastSpawnAt = now
         task.spawn(function()
             pcall(function()
@@ -590,12 +624,10 @@ task.spawn(function()
 
     while true do
         if not State.Chihora then
-            -- Tắt: dừng tween, reset phase
             if phase ~= "OFF" then
                 phase = "OFF"
                 stopTween()
                 npcTweenActive = false
-                print("[Chihora] Tắt bởi UI.")
             end
             task.wait(0.5)
         else
@@ -609,7 +641,6 @@ task.spawn(function()
                     lastBossTweenAt = 0
                     phase           = "IDLE"
                     stopTween()
-                    print("[PART C] 🔄 Character mới -> reset.")
                 end
                 if not hrp then return end
 
@@ -625,7 +656,6 @@ task.spawn(function()
                     if phase ~= "TO_BOSS" then
                         phase = "TO_BOSS"
                         lastBossTweenAt = 0
-                        print("[Chihora] 👾 Xuất hiện -> tween boss mỗi 5s.")
                     end
                     local now = os.clock()
                     if now - lastBossTweenAt >= BOSS_TWEEN_CD then
@@ -659,17 +689,14 @@ task.spawn(function()
                             local lookVec = Vector3.new(npcPos.X - myPos.X, npcPos.Y - myPos.Y, npcPos.Z - myPos.Z)
                             if lookVec.Magnitude < 0.5 then lookVec = Vector3.new(1, 0, 0) end
                             local targetCF = CFrame.new(npcPos, npcPos + lookVec)
-                            print(("[NPC] 🚶 Cách %.0f blocks -> tween @75."):format(dist))
                             tweenAtSpeed(hrp, targetCF, TWEEN_SPEED, function()
                                 npcTweenActive = false
-                                print("[NPC] ✅ Đã tới NPC -> spam SpawnBoss.")
                             end)
                         elseif npcTweenActive then
                             -- chờ tween xong
                         else
                             if phase ~= "SPAWNING" then
                                 phase = "SPAWNING"
-                                print("[NPC] 🎯 Ở NPC -> spam SpawnBoss.")
                             end
                             trySpawnBoss(os.clock())
                         end
@@ -682,4 +709,4 @@ task.spawn(function()
     end
 end)
 
-print("[COMBINED v6] GlobalBoss/Chihora/Yhwach + UI toggle + Weapon auto-equip + Cache")
+print("[COMBINED v7] UI + Spawn Interval tuỳ chỉnh + Weapon + Cache")
