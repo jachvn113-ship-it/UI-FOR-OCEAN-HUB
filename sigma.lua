@@ -1,8 +1,5 @@
 -- ============================================================
--- COMBINED v7
---  UI: GlobalBoss / Chihora / Yhwach + Weapon + Spawn Interval
---  Tween NPC 1 lần / re-tween khi cách >= 100
---  Tween boss mỗi 5s
+-- COMBINED v8 - UI TO RÕ, CÓ Ô SPAWN INTERVAL
 -- ============================================================
 
 local Players           = game:GetService("Players")
@@ -19,11 +16,11 @@ local State = {
     Chihora       = true,
     Yhwach        = true,
     Weapon        = nil,
-    SpawnInterval = 0.75,   -- ✅ giây giữa mỗi lần spam SpawnBoss
+    SpawnInterval = 0.75,
 }
 
 -- ============================================================
--- UI
+-- UI  (TO HƠN, CHỮ RÕ)
 -- ============================================================
 local pg = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -33,84 +30,87 @@ screenGui.ResetOnSpawn = false
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.Parent = pg
 
+-- ===== KHUNG CHÍNH (TO) =====
 local main = Instance.new("Frame")
-main.Size = UDim2.new(0, 230, 0, 410)
-main.Position = UDim2.new(0, 20, 0, 100)
-main.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+main.Size = UDim2.new(0, 340, 0, 560)
+main.Position = UDim2.new(0, 30, 0, 80)
+main.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
 main.BorderSizePixel = 0
 main.Active = true
 main.Draggable = true
 main.Parent = screenGui
 do
-    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 10); c.Parent = main
-    local s = Instance.new("UIStroke"); s.Color = Color3.fromRGB(60, 60, 75); s.Thickness = 1; s.Parent = main
+    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 12); c.Parent = main
+    local s = Instance.new("UIStroke"); s.Color = Color3.fromRGB(80, 80, 100); s.Thickness = 2; s.Parent = main
 end
 
+-- ===== TITLE =====
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, 0, 0, 32)
-title.BackgroundColor3 = Color3.fromRGB(32, 32, 40)
+title.Size = UDim2.new(1, 0, 0, 44)
+title.BackgroundColor3 = Color3.fromRGB(35, 35, 46)
 title.BorderSizePixel = 0
-title.Text = "⚙  AUTO CONTROLS v7"
+title.Text = "⚙  AUTO CONTROLS"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.Font = Enum.Font.GothamBold
-title.TextSize = 13
+title.TextSize = 18
 title.Parent = main
 do
-    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 10); c.Parent = title
+    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 12); c.Parent = title
 end
 
--- ---------- TOGGLES ----------
+-- ===== TOGGLES =====
 local toggleHolder = Instance.new("Frame")
-toggleHolder.Size = UDim2.new(1, -20, 0, 100)
-toggleHolder.Position = UDim2.new(0, 10, 0, 40)
+toggleHolder.Size = UDim2.new(1, -24, 0, 132)
+toggleHolder.Position = UDim2.new(0, 12, 0, 54)
 toggleHolder.BackgroundTransparency = 1
 toggleHolder.Parent = main
 do
     local l = Instance.new("UIListLayout")
-    l.Padding = UDim.new(0, 6)
+    l.Padding = UDim.new(0, 8)
     l.SortOrder = Enum.SortOrder.LayoutOrder
     l.Parent = toggleHolder
 end
 
 local function makeToggle(name, key, order)
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, 0, 0, 28)
-    btn.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+    btn.Size = UDim2.new(1, 0, 0, 38)
+    btn.BackgroundColor3 = Color3.fromRGB(50, 50, 62)
     btn.BorderSizePixel = 0
     btn.Text = ""
     btn.AutoButtonColor = false
     btn.LayoutOrder = order
     btn.Parent = toggleHolder
-    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 6); c.Parent = btn
+    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 8); c.Parent = btn
+    local s = Instance.new("UIStroke"); s.Color = Color3.fromRGB(70, 70, 90); s.Thickness = 1; s.Parent = btn
 
     local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(1, -50, 1, 0)
-    lbl.Position = UDim2.new(0, 12, 0, 0)
+    lbl.Size = UDim2.new(1, -80, 1, 0)
+    lbl.Position = UDim2.new(0, 16, 0, 0)
     lbl.BackgroundTransparency = 1
     lbl.Text = name
     lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.TextColor3 = Color3.fromRGB(230, 230, 230)
-    lbl.Font = Enum.Font.Gotham
-    lbl.TextSize = 12
+    lbl.TextColor3 = Color3.fromRGB(240, 240, 245)
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 15
     lbl.Parent = btn
 
     local ind = Instance.new("TextLabel")
-    ind.Size = UDim2.new(0, 40, 1, 0)
-    ind.Position = UDim2.new(1, -44, 0, 0)
+    ind.Size = UDim2.new(0, 60, 1, 0)
+    ind.Position = UDim2.new(1, -70, 0, 0)
     ind.BackgroundTransparency = 1
     ind.Font = Enum.Font.GothamBold
-    ind.TextSize = 12
+    ind.TextSize = 14
     ind.Parent = btn
 
     local function refresh()
         if State[key] then
             ind.Text = "ON"
-            ind.TextColor3 = Color3.fromRGB(80, 220, 120)
-            btn.BackgroundColor3 = Color3.fromRGB(45, 70, 55)
+            ind.TextColor3 = Color3.fromRGB(90, 240, 130)
+            btn.BackgroundColor3 = Color3.fromRGB(40, 75, 55)
         else
             ind.Text = "OFF"
-            ind.TextColor3 = Color3.fromRGB(220, 90, 90)
-            btn.BackgroundColor3 = Color3.fromRGB(60, 45, 45)
+            ind.TextColor3 = Color3.fromRGB(255, 100, 100)
+            btn.BackgroundColor3 = Color3.fromRGB(70, 42, 42)
         end
     end
     refresh()
@@ -126,86 +126,123 @@ makeToggle("Global Boss", "GlobalBoss", 1)
 makeToggle("Chihora",     "Chihora",    2)
 makeToggle("Yhwach",      "Yhwach",     3)
 
--- ---------- SPAWN INTERVAL ----------
+-- ===== SPAWN INTERVAL (TO, NỔI BẬT) =====
+local intFrame = Instance.new("Frame")
+intFrame.Size = UDim2.new(1, -24, 0, 96)
+intFrame.Position = UDim2.new(0, 12, 0, 194)
+intFrame.BackgroundColor3 = Color3.fromRGB(32, 32, 42)
+intFrame.BorderSizePixel = 0
+intFrame.Parent = main
+do
+    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 10); c.Parent = intFrame
+    local s = Instance.new("UIStroke"); s.Color = Color3.fromRGB(90, 90, 120); s.Thickness = 1; s.Parent = intFrame
+end
+
 local intLabel = Instance.new("TextLabel")
-intLabel.Size = UDim2.new(1, -20, 0, 20)
-intLabel.Position = UDim2.new(0, 10, 0, 150)
+intLabel.Size = UDim2.new(1, -20, 0, 26)
+intLabel.Position = UDim2.new(0, 10, 0, 6)
 intLabel.BackgroundTransparency = 1
 intLabel.Text = "⏱  Spawn Interval (giây)"
 intLabel.TextXAlignment = Enum.TextXAlignment.Left
-intLabel.TextColor3 = Color3.fromRGB(200, 200, 210)
+intLabel.TextColor3 = Color3.fromRGB(255, 220, 120)
 intLabel.Font = Enum.Font.GothamBold
-intLabel.TextSize = 12
-intLabel.Parent = main
+intLabel.TextSize = 14
+intLabel.Parent = intFrame
 
+-- Hàng dưới: TextBox + nút Apply
 local intBox = Instance.new("TextBox")
-intBox.Size = UDim2.new(1, -20, 0, 28)
-intBox.Position = UDim2.new(0, 10, 0, 172)
-intBox.BackgroundColor3 = Color3.fromRGB(32, 32, 40)
+intBox.Size = UDim2.new(1, -110, 0, 42)
+intBox.Position = UDim2.new(0, 10, 0, 42)
+intBox.BackgroundColor3 = Color3.fromRGB(15, 15, 22)
 intBox.BorderSizePixel = 0
 intBox.Text = tostring(State.SpawnInterval)
-intBox.PlaceholderText = "vd: 0.1 hoặc 1"
+intBox.PlaceholderText = "vd: 0.1 / 0.5 / 1 / 3"
 intBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-intBox.PlaceholderColor3 = Color3.fromRGB(140, 140, 150)
+intBox.PlaceholderColor3 = Color3.fromRGB(150, 150, 165)
 intBox.Font = Enum.Font.GothamBold
-intBox.TextSize = 13
+intBox.TextSize = 18
 intBox.ClearTextOnFocus = false
-intBox.Parent = main
+intBox.Parent = intFrame
 do
-    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 6); c.Parent = intBox
+    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 8); c.Parent = intBox
+    local s = Instance.new("UIStroke"); s.Color = Color3.fromRGB(100, 100, 130); s.Thickness = 2; s.Parent = intBox
     local p = Instance.new("UIPadding")
-    p.PaddingLeft = UDim.new(0, 8)
+    p.PaddingLeft = UDim.new(0, 12)
     p.Parent = intBox
+end
+
+local applyBtn = Instance.new("TextButton")
+applyBtn.Size = UDim2.new(0, 90, 0, 42)
+applyBtn.Position = UDim2.new(1, -100, 0, 42)
+applyBtn.BackgroundColor3 = Color3.fromRGB(60, 110, 180)
+applyBtn.BorderSizePixel = 0
+applyBtn.Text = "APPLY"
+applyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+applyBtn.Font = Enum.Font.GothamBold
+applyBtn.TextSize = 14
+applyBtn.AutoButtonColor = true
+applyBtn.Parent = intFrame
+do
+    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 8); c.Parent = applyBtn
 end
 
 local function applyInterval()
     local n = tonumber(intBox.Text)
     if n and n > 0 and n <= 60 then
         State.SpawnInterval = n
-        intBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+        intBox.TextColor3 = Color3.fromRGB(120, 255, 150)
+        applyBtn.BackgroundColor3 = Color3.fromRGB(60, 180, 100)
         print(("[UI] SpawnInterval = %.3fs"):format(n))
+        task.delay(0.3, function()
+            intBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+            applyBtn.BackgroundColor3 = Color3.fromRGB(60, 110, 180)
+        end)
     else
-        intBox.TextColor3 = Color3.fromRGB(255, 120, 120)
+        intBox.TextColor3 = Color3.fromRGB(255, 110, 110)
+        applyBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
         warn("[UI] SpawnInterval không hợp lệ (0 < x <= 60).")
+        task.delay(0.6, function()
+            intBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+            applyBtn.BackgroundColor3 = Color3.fromRGB(60, 110, 180)
+        end)
     end
 end
 
-intBox.FocusLost:Connect(function()
-    applyInterval()
-    -- chuẩn hoá hiển thị
-    intBox.Text = tostring(State.SpawnInterval)
-end)
+applyBtn.MouseButton1Click:Connect(applyInterval)
+intBox.FocusLost:Connect(function(enterPressed) applyInterval() end)
 
--- ---------- WEAPON LIST ----------
+-- ===== WEAPON =====
 local wTitle = Instance.new("TextLabel")
-wTitle.Size = UDim2.new(1, -20, 0, 22)
-wTitle.Position = UDim2.new(0, 10, 0, 210)
+wTitle.Size = UDim2.new(1, -24, 0, 26)
+wTitle.Position = UDim2.new(0, 12, 0, 300)
 wTitle.BackgroundTransparency = 1
-wTitle.Text = "🔫 Weapon (auto equip)"
+wTitle.Text = "🔫  Weapon (auto equip)"
 wTitle.TextXAlignment = Enum.TextXAlignment.Left
-wTitle.TextColor3 = Color3.fromRGB(200, 200, 210)
+wTitle.TextColor3 = Color3.fromRGB(200, 200, 220)
 wTitle.Font = Enum.Font.GothamBold
-wTitle.TextSize = 12
+wTitle.TextSize = 14
 wTitle.Parent = main
 
 local weaponList = Instance.new("ScrollingFrame")
-weaponList.Size = UDim2.new(1, -20, 0, 158)
-weaponList.Position = UDim2.new(0, 10, 0, 234)
-weaponList.BackgroundColor3 = Color3.fromRGB(32, 32, 40)
+weaponList.Size = UDim2.new(1, -24, 0, 220)
+weaponList.Position = UDim2.new(0, 12, 0, 330)
+weaponList.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
 weaponList.BorderSizePixel = 0
-weaponList.ScrollBarThickness = 4
+weaponList.ScrollBarThickness = 6
+weaponList.ScrollBarImageColor3 = Color3.fromRGB(90, 90, 120)
 weaponList.CanvasSize = UDim2.new(0, 0, 0, 0)
 weaponList.Parent = main
 do
-    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 6); c.Parent = weaponList
+    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 8); c.Parent = weaponList
     local l = Instance.new("UIListLayout")
-    l.Padding = UDim.new(0, 4)
+    l.Padding = UDim.new(0, 6)
     l.SortOrder = Enum.SortOrder.LayoutOrder
     l.Parent = weaponList
     local p = Instance.new("UIPadding")
-    p.PaddingTop = UDim.new(0, 4)
-    p.PaddingLeft = UDim.new(0, 4)
-    p.PaddingRight = UDim.new(0, 4)
+    p.PaddingTop = UDim.new(0, 6)
+    p.PaddingLeft = UDim.new(0, 6)
+    p.PaddingRight = UDim.new(0, 6)
+    p.PaddingBottom = UDim.new(0, 6)
     p.Parent = weaponList
 end
 
@@ -236,30 +273,31 @@ local function refreshWeapons()
 
     if #list == 0 then
         local empty = Instance.new("TextLabel")
-        empty.Size = UDim2.new(1, -8, 0, 24)
+        empty.Size = UDim2.new(1, -12, 0, 32)
         empty.BackgroundTransparency = 1
         empty.Text = "(Không có vũ khí)"
-        empty.TextColor3 = Color3.fromRGB(140, 140, 150)
+        empty.TextColor3 = Color3.fromRGB(150, 150, 165)
         empty.Font = Enum.Font.Gotham
-        empty.TextSize = 11
+        empty.TextSize = 13
         empty.Parent = weaponList
         return
     end
 
     for i, name in ipairs(list) do
         local btn = Instance.new("TextButton")
-        btn.Size = UDim2.new(1, -8, 0, 24)
+        btn.Size = UDim2.new(1, -12, 0, 34)
         btn.BackgroundColor3 = (State.Weapon == name)
-            and Color3.fromRGB(60, 90, 140)
-            or  Color3.fromRGB(48, 48, 58)
+            and Color3.fromRGB(60, 110, 190)
+            or  Color3.fromRGB(48, 48, 60)
         btn.BorderSizePixel = 0
-        btn.Text = name
-        btn.TextColor3 = Color3.fromRGB(230, 230, 230)
-        btn.Font = Enum.Font.Gotham
-        btn.TextSize = 11
+        btn.Text = "  " .. name
+        btn.TextXAlignment = Enum.TextXAlignment.Left
+        btn.TextColor3 = Color3.fromRGB(240, 240, 245)
+        btn.Font = Enum.Font.GothamBold
+        btn.TextSize = 13
         btn.LayoutOrder = i
         btn.Parent = weaponList
-        local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 4); c.Parent = btn
+        local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 6); c.Parent = btn
 
         btn.MouseButton1Click:Connect(function()
             if State.Weapon == name then
@@ -273,7 +311,7 @@ local function refreshWeapons()
         end)
     end
 
-    weaponList.CanvasSize = UDim2.new(0, 0, 0, weaponList.UIListLayout.AbsoluteContentSize.Y + 10)
+    weaponList.CanvasSize = UDim2.new(0, 0, 0, weaponList.UIListLayout.AbsoluteContentSize.Y + 12)
 end
 
 task.spawn(function()
@@ -349,10 +387,7 @@ end
 -- ============================================================
 task.spawn(function()
     local prompt = pg:WaitForChild("GlobalBossPrompt", 30)
-    if not prompt then
-        warn("[AutoJoin] Không tìm thấy GlobalBossPrompt")
-        return
-    end
+    if not prompt then warn("[AutoJoin] Không có prompt") return end
 
     local function findChild(parent, ...)
         if not parent then return nil end
@@ -367,10 +402,7 @@ task.spawn(function()
     local OfferPanel  = prompt:WaitForChild("OfferPanel", 10)
     local PartyPanel  = prompt:WaitForChild("PartyPanel", 10)
     local StatusPanel = prompt:WaitForChild("StatusPanel", 10)
-    if not (OfferPanel and PartyPanel and StatusPanel) then
-        warn("[AutoJoin] Thiếu panel, thoát.")
-        return
-    end
+    if not (OfferPanel and PartyPanel and StatusPanel) then return end
 
     local OfferJoin   = findChild(OfferPanel,  "ButtonHolder", "JoinButton")
     local PartyJoin   = findChild(PartyPanel,  "ButtonHolder", "JoinButton")
@@ -380,11 +412,11 @@ task.spawn(function()
 
     local COOLDOWN, JOIN_DEBOUNCE, REFRESH_DEBOUNCE = 0.5, 1.0, 1.5
     local queued = false
-    local lastJoinAt, lastRefreshAt, lastStateLog = 0, 0, ""
+    local lastJoinAt, lastRefreshAt = 0, 0
 
-    local function contains(text, kw)
-        if type(text) ~= "string" or type(kw) ~= "string" then return false end
-        return string.find(string.lower(text), string.lower(kw), 1, true) ~= nil
+    local function contains(t, kw)
+        if type(t) ~= "string" or type(kw) ~= "string" then return false end
+        return string.find(string.lower(t), string.lower(kw), 1, true) ~= nil
     end
     local function fireButton(btn)
         if not btn or not btn.Visible or btn.Active == false then return false end
@@ -392,23 +424,17 @@ task.spawn(function()
             if btn:IsA("TextButton") or btn:IsA("ImageButton") then btn:Activated() end
         end)
     end
-    local ERROR_KEYWORDS = {
-        "GlobalBoss service is unavailable","Try again","unavailable","error",
-        "failed","unable","retry",
-    }
-    local function isErrorText(text)
-        if type(text) ~= "string" then return false end
-        for _, kw in ipairs(ERROR_KEYWORDS) do
-            if contains(text, kw) then return true, kw end
+    local ERR = {"GlobalBoss service is unavailable","Try again","unavailable","error","failed","unable","retry"}
+    local function isErr(t)
+        if type(t) ~= "string" then return false end
+        for _, kw in ipairs(ERR) do
+            if contains(t, kw) then return true, kw end
         end
         return false, nil
     end
-    local function isQueueSuccess(t)
-        return contains(t, "queued for the GlobalBoss")
-           and contains(t, "Parties will never be split")
+    local function isOk(t)
+        return contains(t, "queued for the GlobalBoss") and contains(t, "Parties will never be split")
     end
-
-    print("[AutoJoin] Bắt đầu quét...")
 
     while true do
         if not State.GlobalBoss then
@@ -426,32 +452,22 @@ task.spawn(function()
                 StatusLabel = findChild(StatusPanel, "StatusLabel")
                 TitleLabel  = findChild(StatusPanel, "TitleLabel")
             end
-
             local now = os.clock()
             local statusText = (StatusLabel and StatusLabel.Text) or ""
             local titleText  = (TitleLabel  and TitleLabel.Text)  or ""
 
-            if isQueueSuccess(statusText) then
-                if not queued then
-                    queued = true
-                    print("[AutoJoin] ✅ ĐÃ VÀO QUEUE THÀNH CÔNG!")
-                end
+            if isOk(statusText) then
+                queued = true
             else
-                if queued then
-                    queued = false
-                    print("[AutoJoin] 🔄 Queue không còn, quay lại chế độ join.")
-                end
+                queued = false
             end
 
-            local hasErr, kw = isErrorText(statusText)
-            if not hasErr then hasErr, kw = isErrorText(titleText) end
+            local hasErr, kw = isErr(statusText)
+            if not hasErr then hasErr, kw = isErr(titleText) end
 
-            if hasErr then
-                if queued then queued = false end
-                if RefreshBtn and RefreshBtn.Visible and (now - lastRefreshAt) > REFRESH_DEBOUNCE then
-                    lastRefreshAt = now
-                    fireButton(RefreshBtn)
-                end
+            if hasErr and RefreshBtn and RefreshBtn.Visible and (now - lastRefreshAt) > REFRESH_DEBOUNCE then
+                lastRefreshAt = now
+                fireButton(RefreshBtn)
             end
 
             if not queued and (now - lastJoinAt) > JOIN_DEBOUNCE then
@@ -461,22 +477,17 @@ task.spawn(function()
                     if fireButton(PartyJoin) then lastJoinAt = now end
                 end
             end
-
-            local state = queued and "QUEUED" or (hasErr and "ERROR" or "TRYING")
-            if state ~= lastStateLog then lastStateLog = state end
-
             task.wait(COOLDOWN)
         end
     end
 end)
 
 -- ============================================================
--- PART B: YHWACH TWEEN
+-- PART B: YHWACH
 -- ============================================================
 task.spawn(function()
     local CHECK_SLOW, CHECK_FAST = 5, 0.5
     local TWEEN_DISTANCE, TWEEN_TIME = 20, 1
-
     local tweenInfo = TweenInfo.new(TWEEN_TIME, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
     local currentTween, yhwachPresent = nil, false
 
@@ -501,26 +512,20 @@ task.spawn(function()
             local character = LocalPlayer.Character
             local myRoot    = character and character:FindFirstChild("HumanoidRootPart")
             local humanoid  = character and character:FindFirstChild("Humanoid")
-
             refreshCache()
             local yhwach = Cache.enemiesFolder and Cache.enemiesFolder:FindFirstChild("Yhwach")
-
-            local yhwachAlive = false
+            local alive = false
             if yhwach then
                 local hum = yhwach:FindFirstChildOfClass("Humanoid")
-                yhwachAlive = (hum == nil) or (hum.Health > 0)
+                alive = (hum == nil) or (hum.Health > 0)
             end
-
-            if myRoot and yhwach and yhwachAlive then
+            if myRoot and yhwach and alive then
                 local targetRoot = yhwach:FindFirstChild("HumanoidRootPart")
                     or yhwach.PrimaryPart
                     or yhwach:FindFirstChild("Torso")
                     or yhwach:FindFirstChild("UpperTorso")
                 if targetRoot then
-                    if not yhwachPresent then
-                        yhwachPresent = true
-                        print("[Yhwach] 👾 Xuất hiện.")
-                    end
+                    yhwachPresent = true
                     local backPosition = (targetRoot.CFrame * CFrame.new(0, 0, TWEEN_DISTANCE)).Position
                     local goalCFrame   = CFrame.new(backPosition, targetRoot.Position)
                     if humanoid then humanoid.PlatformStand = true end
@@ -535,7 +540,6 @@ task.spawn(function()
                 end
                 if humanoid then humanoid.PlatformStand = false end
             end
-
             task.wait(yhwachPresent and CHECK_FAST or CHECK_SLOW)
         end
     end
@@ -548,7 +552,6 @@ task.spawn(function()
     local Remotes   = ReplicatedStorage:WaitForChild("Remotes", 30)
     local Events    = Remotes:WaitForChild("Events", 30)
     local Functions = Remotes:WaitForChild("Functions", 30)
-
     local GoldShopBuy = Events:WaitForChild("GoldShopBuy", 30)
     local InputRemote = Functions:WaitForChild("Input", 30)
 
@@ -568,12 +571,12 @@ task.spawn(function()
     local NPC_RETWEEN_DIST = 100
     local BOSS_TWEEN_CD    = 5
 
-    local lastCharacter     = nil
-    local currentTween      = nil
-    local npcTweenActive    = false
-    local lastSpawnAt       = 0
-    local lastBossTweenAt   = 0
-    local phase             = "IDLE"
+    local lastCharacter   = nil
+    local currentTween    = nil
+    local npcTweenActive  = false
+    local lastSpawnAt     = 0
+    local lastBossTweenAt = 0
+    local phase           = "IDLE"
 
     local function stopTween()
         if currentTween then
@@ -598,10 +601,9 @@ task.spawn(function()
         currentTween:Play()
     end
 
-    -- ✅ Dùng State.SpawnInterval (đọc mỗi lần gọi)
     local function trySpawnBoss(now)
         local interval = State.SpawnInterval or 0.75
-        if interval < 0.05 then interval = 0.05 end  -- sàn an toàn
+        if interval < 0.05 then interval = 0.05 end
         if now - lastSpawnAt < interval then return end
         lastSpawnAt = now
         task.spawn(function()
@@ -620,8 +622,6 @@ task.spawn(function()
             or npc:FindFirstChild("UpperTorso")
     end
 
-    print("[PART C] Bắt đầu.")
-
     while true do
         if not State.Chihora then
             if phase ~= "OFF" then
@@ -634,7 +634,6 @@ task.spawn(function()
             local ok, err = pcall(function()
                 local char = LocalPlayer.Character
                 local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-
                 if char ~= lastCharacter then
                     lastCharacter   = char
                     npcTweenActive  = false
@@ -643,7 +642,6 @@ task.spawn(function()
                     stopTween()
                 end
                 if not hrp then return end
-
                 refreshCache()
                 local chihora = Cache.enemiesFolder and Cache.enemiesFolder:FindFirstChild("Chihora")
                 local chihoraAlive = false
@@ -651,7 +649,6 @@ task.spawn(function()
                     local hum = chihora:FindFirstChildOfClass("Humanoid")
                     chihoraAlive = (hum == nil) or (hum.Health > 0)
                 end
-
                 if chihora and chihoraAlive then
                     if phase ~= "TO_BOSS" then
                         phase = "TO_BOSS"
@@ -682,7 +679,6 @@ task.spawn(function()
                         local myPos  = hrp.Position
                         local dx, dy, dz = myPos.X - npcPos.X, myPos.Y - npcPos.Y, myPos.Z - npcPos.Z
                         local dist = math.sqrt(dx*dx + dy*dy + dz*dz)
-
                         if dist >= NPC_RETWEEN_DIST and not npcTweenActive then
                             npcTweenActive = true
                             phase = "TO_NPC"
@@ -693,7 +689,7 @@ task.spawn(function()
                                 npcTweenActive = false
                             end)
                         elseif npcTweenActive then
-                            -- chờ tween xong
+                            -- chờ
                         else
                             if phase ~= "SPAWNING" then
                                 phase = "SPAWNING"
@@ -709,4 +705,4 @@ task.spawn(function()
     end
 end)
 
-print("[COMBINED v7] UI + Spawn Interval tuỳ chỉnh + Weapon + Cache")
+print("[COMBINED v8] UI to rõ + SpawnInterval + Weapon + Cache")
