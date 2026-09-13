@@ -1,5 +1,5 @@
 -- ============================================================
--- COMBINED v10.1 - SMOOTH TWEEN + RETURN HOME
+-- COMBINED v10.2 - SMOOTH TWEEN + RETURN HOME + DASH BYPASS
 -- ============================================================
 
 local Players           = game:GetService("Players")
@@ -21,7 +21,68 @@ local State = {
     Weapon        = nil,
     SpawnInterval = 0.75,
     DebugMode     = true,
+    DashBypass    = true,   -- ✅ spam Dash trong lúc tween
 }
+
+-- ============================================================
+-- DASH SPAMMER (chống detect khi tween → không bị kéo về)
+-- ============================================================
+local DashSpammer = (function()
+    local remote       = nil
+    local lastFireAt   = 0
+    local FIRE_INTERVAL = 0.05   -- 50ms → ~20 lần/giây
+    local enabled      = true
+
+    local function getRemote()
+        if remote and remote.Parent then return remote end
+        local ok, r = pcall(function()
+            local Remotes = ReplicatedStorage:FindFirstChild("Remotes")
+                or ReplicatedStorage:WaitForChild("Remotes", 10)
+            if not Remotes then return nil end
+            return Remotes:FindFirstChild("Input")
+                or Remotes:WaitForChild("Input", 10)
+        end)
+        remote = ok and r or nil
+        return remote
+    end
+
+    local function fire(cframe)
+        if not enabled then return end
+        local now = os.clock()
+        if now - lastFireAt < FIRE_INTERVAL then return end
+        lastFireAt = now
+        local r = getRemote()
+        if not r then return end
+        pcall(function()
+            r:FireServer("Dash", cframe)
+        end)
+    end
+
+    return {
+        fire       = fire,
+        setEnabled = function(v) enabled = v end,
+        isEnabled  = function() return enabled end,
+    }
+end)()
+
+-- Bộ đếm: có bao nhiêu tween đang chạy → quyết định spam Dash
+local inTweenRefs = 0
+local function pushTween() inTweenRefs += 1 end
+local function popTween()  inTweenRefs -= 1; if inTweenRefs < 0 then inTweenRefs = 0 end end
+
+-- Vòng lặp spam Dash toàn cục khi có tween hoạt động
+task.spawn(function()
+    while true do
+        task.wait(0.03)
+        if State.DashBypass and inTweenRefs > 0 then
+            local char = LocalPlayer.Character
+            local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+            if hrp and hrp.Parent then
+                DashSpammer.fire(hrp.CFrame)
+            end
+        end
+    end
+end)
 
 -- ============================================================
 -- SMOOTH TWEEN HELPER (chống detect + return home)
@@ -29,27 +90,27 @@ local State = {
 local TweenHelper = {}
 TweenHelper.__index = TweenHelper
 
-local MIN_DURATION = 0.35          -- tween tối thiểu (không teleport tức thời)
-local MIN_SPEED    = 12            -- studs/s tối thiểu khi speed quá thấp
+local MIN_DURATION = 0.35
+local MIN_SPEED    = 12
 
 function TweenHelper.new(hrp)
     local self = setmetatable({}, TweenHelper)
     self.hrp         = hrp
-    self.home        = nil         -- vị trí gốc lưu lại
+    self.home        = nil
     self.activeTween = nil
     self.returning   = false
+    self.inMove      = false
     return self
 end
 
 function TweenHelper:setHrp(hrp)
     if hrp ~= self.hrp then
         self.hrp = hrp
-        self.home = nil            -- reset home khi đổi nhân vật
+        self.home = nil
         self:cancel()
     end
 end
 
--- Lưu vị trí gốc (chỉ lưu 1 lần cho tới khi clearHome)
 function TweenHelper:saveHome()
     if self.hrp and not self.home then
         self.home = self.hrp.CFrame
@@ -60,41 +121,62 @@ function TweenHelper:clearHome()
     self.home = nil
 end
 
+function TweenHelper:beginMove()
+    if not self.inMove then
+        self.inMove = true
+        pushTween()
+    end
+end
+
+function TweenHelper:endMove()
+    if self.inMove then
+        self.inMove = false
+        popTween()
+    end
+end
+
 function TweenHelper:cancel()
     if self.activeTween then
         pcall(function() self.activeTween:Cancel() end)
         self.activeTween = nil
     end
+    self:endMove()
 end
 
--- Tính duration có jitter để tránh pattern cố định
 local function computeDuration(dist, speed)
     if not speed or speed < MIN_SPEED then speed = MIN_SPEED end
     local base = dist / speed
     if base < MIN_DURATION then base = MIN_DURATION end
-    -- jitter ±15%
     local jitter = 1 + (math.random() - 0.5) * 0.30
     return base * jitter
 end
 
--- Tween mượt: Sine InOut + jitter, chia 2 chặng để tự nhiên
 function TweenHelper:move(targetCFrame, speed, onDone)
     if not self.hrp then return end
     self:cancel()
     self.returning = false
+    self:beginMove()
 
     local dist = (self.hrp.Position - targetCFrame.Position).Magnitude
+
+    local function finish()
+        self:endMove()
+        if onDone then onDone() end
+    end
+
     if dist < 0.5 then
-        -- đã ở gần đích → set nhẹ để không teleport
         local dur = MIN_DURATION
-        self.activeTween = TweenService:Create(
+        local t = TweenService:Create(
             self.hrp,
             TweenInfo.new(dur, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
             { CFrame = targetCFrame }
         )
+        self.activeTween = t
+        t.Completed:Connect(function(st)
+            if st == Enum.PlaybackState.Completed then finish() end
+        end)
+        t:Play()
     else
-        -- Chia 2 chặng: chặng đầu nhanh hơn (Quad Out), chặng 2 chậm lại (Sine InOut)
-        -- để giống chuyển động người thật, không bị "snap"
         local midPos = self.hrp.Position:Lerp(targetCFrame.Position, 0.65)
         local midCF  = CFrame.new(midPos, targetCFrame.Position)
         local dur1   = computeDuration((self.hrp.Position - midPos).Magnitude, speed * 1.1)
@@ -117,21 +199,15 @@ function TweenHelper:move(targetCFrame, speed, onDone)
             if not self.hrp then return end
             self.activeTween = tween2
             tween2:Play()
-            if onDone then
-                tween2.Completed:Connect(function(st2)
-                    if st2 == Enum.PlaybackState.Completed and onDone then onDone() end
-                end)
-            end
         end)
-    end
+        tween2.Completed:Connect(function(st)
+            if st == Enum.PlaybackState.Completed then finish() end
+        end)
 
-    self.activeTween:Play()
-    if onDone and not self.activeTween.Completed then
-        -- fallback cho nhánh dist < 0.5
+        tween1:Play()
     end
 end
 
--- Quay về vị trí gốc mượt mà
 function TweenHelper:goHome(speed, onDone)
     if not self.home or not self.hrp then
         if onDone then onDone() end
@@ -147,7 +223,7 @@ function TweenHelper:goHome(speed, onDone)
 end
 
 -- ============================================================
--- UI (giữ nguyên)
+-- UI (giữ nguyên từ v10.1, thêm toggle Dash Bypass)
 -- ============================================================
 local pg = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -158,7 +234,7 @@ screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.Parent = pg
 
 local main = Instance.new("Frame")
-main.Size = UDim2.new(0, 340, 0, 610)
+main.Size = UDim2.new(0, 340, 0, 654)
 main.Position = UDim2.new(0, 30, 0, 60)
 main.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
 main.BorderSizePixel = 0
@@ -174,7 +250,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 44)
 title.BackgroundColor3 = Color3.fromRGB(35, 35, 46)
 title.BorderSizePixel = 0
-title.Text = "⚙  AUTO CONTROLS v10.1"
+title.Text = "⚙  AUTO CONTROLS v10.2"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 18
@@ -183,9 +259,9 @@ do
     local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 12); c.Parent = title
 end
 
--- ===== TOGGLES =====
+-- ===== TOGGLES (5 cái) =====
 local toggleHolder = Instance.new("Frame")
-toggleHolder.Size = UDim2.new(1, -24, 0, 176)
+toggleHolder.Size = UDim2.new(1, -24, 0, 222)
 toggleHolder.Position = UDim2.new(0, 12, 0, 54)
 toggleHolder.BackgroundTransparency = 1
 toggleHolder.Parent = main
@@ -243,19 +319,23 @@ local function makeToggle(name, key, order)
     btn.MouseButton1Click:Connect(function()
         State[key] = not State[key]
         refresh()
+        if key == "DashBypass" then
+            DashSpammer.setEnabled(State.DashBypass)
+        end
         print(("[UI] %s = %s"):format(name, State[key] and "ON" or "OFF"))
     end)
 end
 
-makeToggle("Global Boss", "GlobalBoss", 1)
-makeToggle("Chihora",     "Chihora",    2)
-makeToggle("Yhwach",      "Yhwach",     3)
-makeToggle("Auto Attack", "AutoAttack", 4)
+makeToggle("Global Boss",  "GlobalBoss",  1)
+makeToggle("Chihora",      "Chihora",     2)
+makeToggle("Yhwach",       "Yhwach",      3)
+makeToggle("Auto Attack",  "AutoAttack",  4)
+makeToggle("Dash Bypass",  "DashBypass",  5)   -- ✅ mới
 
 -- ===== SPAWN INTERVAL =====
 local intFrame = Instance.new("Frame")
 intFrame.Size = UDim2.new(1, -24, 0, 96)
-intFrame.Position = UDim2.new(0, 12, 0, 240)
+intFrame.Position = UDim2.new(0, 12, 0, 286)
 intFrame.BackgroundColor3 = Color3.fromRGB(32, 32, 42)
 intFrame.BorderSizePixel = 0
 intFrame.Parent = main
@@ -339,7 +419,7 @@ intBox.FocusLost:Connect(function() applyInterval() end)
 -- ===== WEAPON =====
 local wTitle = Instance.new("TextLabel")
 wTitle.Size = UDim2.new(1, -24, 0, 26)
-wTitle.Position = UDim2.new(0, 12, 0, 346)
+wTitle.Position = UDim2.new(0, 12, 0, 392)
 wTitle.BackgroundTransparency = 1
 wTitle.Text = "🔫  Weapon (auto equip)"
 wTitle.TextXAlignment = Enum.TextXAlignment.Left
@@ -350,7 +430,7 @@ wTitle.Parent = main
 
 local weaponList = Instance.new("ScrollingFrame")
 weaponList.Size = UDim2.new(1, -24, 0, 220)
-weaponList.Position = UDim2.new(0, 12, 0, 376)
+weaponList.Position = UDim2.new(0, 12, 0, 422)
 weaponList.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
 weaponList.BorderSizePixel = 0
 weaponList.ScrollBarThickness = 6
@@ -562,7 +642,7 @@ local function refreshCache(force)
 end
 
 -- ============================================================
--- PART A: AUTO GLOBAL BOSS
+-- PART A: AUTO GLOBAL BOSS (giữ nguyên)
 -- ============================================================
 task.spawn(function()
     local prompt = pg:WaitForChild("GlobalBossPrompt", 30)
@@ -592,12 +672,6 @@ task.spawn(function()
     local StatusLabel = findChild(StatusPanel, "StatusLabel")
     local TitleLabel  = findChild(StatusPanel, "TitleLabel")
 
-    print("[AutoJoin] Khởi tạo:")
-    print("  - OfferJoin  =", OfferJoin and OfferJoin:GetFullName() or "NIL")
-    print("  - PartyJoin  =", PartyJoin and PartyJoin:GetFullName() or "NIL")
-    print("  - RefreshBtn =", RefreshBtn and RefreshBtn:GetFullName() or "NIL")
-    print("  - StatusLabel=", StatusLabel and StatusLabel:GetFullName() or "NIL")
-
     local COOLDOWN, JOIN_DEBOUNCE, REFRESH_DEBOUNCE = 0.5, 1.0, 1.5
     local queued = false
     local lastJoinAt, lastRefreshAt = 0, 0
@@ -609,27 +683,11 @@ task.spawn(function()
     end
 
     local function fireButton(btn, tag)
-        if not btn then
-            print(("[Fire:%s] btn = nil"):format(tag or "?"))
-            return false
-        end
-        if not btn.Visible then
-            print(("[Fire:%s] btn KHÔNG Visible"):format(tag or "?"))
-            return false
-        end
-
+        if not btn or not btn.Visible then return false end
         pcall(function()
             if btn:IsA("TextButton") or btn:IsA("ImageButton") then
                 btn:Activated()
-            end
-        end)
-        pcall(function()
-            if btn:IsA("TextButton") or btn:IsA("ImageButton") then
                 btn.MouseButton1Click:Fire()
-            end
-        end)
-        pcall(function()
-            if btn:IsA("TextButton") or btn:IsA("ImageButton") then
                 btn.MouseButton1Down:Fire()
                 btn.MouseButton1Up:Fire()
             end
@@ -650,8 +708,6 @@ task.spawn(function()
                 end
             end
         end)
-
-        print(("[Fire:%s] Đã fire nút %s"):format(tag or "?", btn.Name))
         return true
     end
 
@@ -666,8 +722,6 @@ task.spawn(function()
     local function isOk(t)
         return contains(t, "queued for the GlobalBoss") and contains(t, "Parties will never be split")
     end
-
-    print("[AutoJoin] Bắt đầu vòng lặp...")
 
     while true do
         if not State.GlobalBoss then
@@ -690,19 +744,9 @@ task.spawn(function()
             local statusText = (StatusLabel and StatusLabel.Text) or ""
             local titleText  = (TitleLabel  and TitleLabel.Text)  or ""
 
-            if State.DebugMode and (now - lastLogAt) > 2 then
-                lastLogAt = now
-                print(("[Debug] Status='%s' | queued=%s | OfferJoin.V=%s A=%s"):format(
-                    statusText, tostring(queued),
-                    tostring(OfferJoin and OfferJoin.Visible),
-                    tostring(OfferJoin and OfferJoin.Active)))
-            end
-
             if isOk(statusText) then
-                if not queued then print("[AutoJoin] ✅ ĐÃ VÀO QUEUE!") end
                 queued = true
             else
-                if queued then print("[AutoJoin] 🔄 Queue mất, quay lại join.") end
                 queued = false
             end
 
@@ -711,7 +755,6 @@ task.spawn(function()
 
             if hasErr and RefreshBtn and RefreshBtn.Visible and (now - lastRefreshAt) > REFRESH_DEBOUNCE then
                 lastRefreshAt = now
-                print(("[AutoJoin] ⚠️ Lỗi (%s) → Refresh"):format(tostring(kw)))
                 fireButton(RefreshBtn, "Refresh")
             end
 
@@ -729,11 +772,11 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- PART B: YHWACH (smooth + return home)
+-- PART B: YHWACH
 -- ============================================================
 task.spawn(function()
     local CHECK_SLOW, CHECK_FAST = 5, 0.5
-    local MOVE_SPEED   = 55      -- studs/s (mượt hơn, không teleport)
+    local MOVE_SPEED   = 55
     local RETURN_SPEED = 45
     local STANDOFF     = 14
 
@@ -755,10 +798,7 @@ task.spawn(function()
             if yhwachOn then
                 yhwachOn = false
                 if humanoid then humanoid.PlatformStand = false end
-                -- Quay về chỗ cũ khi tắt
-                if tweenH.home then
-                    tweenH:goHome(RETURN_SPEED)
-                end
+                if tweenH.home then tweenH:goHome(RETURN_SPEED) end
             end
             task.wait(0.5)
         else
@@ -777,14 +817,12 @@ task.spawn(function()
                     or yhwach:FindFirstChild("UpperTorso")
 
                 if targetRoot then
-                    -- Lưu vị trí gốc lần đầu bám boss
                     tweenH:saveHome()
                     yhwachOn = true
                     if humanoid then humanoid.PlatformStand = true end
 
-                    -- Tính điểm đứng sau lưng, có offset ngẫu nhiên nhẹ
-                    local offsetBack  = STANDOFF + (math.random() - 0.5) * 4
-                    local offsetSide  = (math.random() - 0.5) * 6
+                    local offsetBack = STANDOFF + (math.random() - 0.5) * 4
+                    local offsetSide = (math.random() - 0.5) * 6
                     local backPos = (targetRoot.CFrame * CFrame.new(offsetSide, 0, offsetBack)).Position
                     local goalCF  = CFrame.new(backPos, targetRoot.Position)
 
@@ -794,10 +832,7 @@ task.spawn(function()
                 if yhwachOn then
                     yhwachOn = false
                     if humanoid then humanoid.PlatformStand = false end
-                    -- Boss chết / biến mất → về chỗ cũ
-                    if tweenH.home then
-                        tweenH:goHome(RETURN_SPEED)
-                    end
+                    if tweenH.home then tweenH:goHome(RETURN_SPEED) end
                 end
             end
             task.wait(yhwachOn and CHECK_FAST or CHECK_SLOW)
@@ -806,7 +841,7 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- PART C: NPC + SPAWN BOSS + CHIHORA (smooth + return home)
+-- PART C: NPC + SPAWN BOSS + CHIHORA
 -- ============================================================
 task.spawn(function()
     local Remotes   = ReplicatedStorage:WaitForChild("Remotes", 30)
@@ -860,9 +895,7 @@ task.spawn(function()
         if not State.Chihora then
             if phase ~= "OFF" then
                 phase = "OFF"
-                if tweenH and tweenH.home then
-                    tweenH:goHome(RETURN_SPEED)
-                end
+                if tweenH and tweenH.home then tweenH:goHome(RETURN_SPEED) end
             end
             task.wait(0.5)
         else
@@ -889,7 +922,6 @@ task.spawn(function()
                 end
 
                 if chihora and chihoraAlive then
-                    -- Lưu vị trí gốc lần đầu lao vào boss
                     tweenH:saveHome()
                     phase = "TO_BOSS"
 
@@ -902,7 +934,6 @@ task.spawn(function()
                         if mag < 0.5 then ux, uy, uz = 1, 0, 0
                         else ux, uy, uz = dx/mag, dy/mag, dz/mag end
 
-                        -- Offset ngẫu nhiên nhẹ để không đứng y 1 chỗ
                         local jitter = 1 + (math.random() - 0.5) * 0.25
                         local tx = enemyPos.X + ux * BOSS_STANDOFF * jitter
                         local ty = enemyPos.Y + uy * BOSS_STANDOFF * jitter
@@ -912,7 +943,6 @@ task.spawn(function()
                         tweenH:move(targetCF, MOVE_SPEED)
                     end
                 else
-                    -- Không còn boss → về vị trí gốc trước khi làm việc khác
                     if tweenH.home and not tweenH.returning then
                         tweenH:goHome(RETURN_SPEED)
                     end
@@ -943,4 +973,4 @@ task.spawn(function()
     end
 end)
 
-print("[COMBINED v10.1] Đã chạy: GlobalBoss + Chihora + Yhwach + AutoAttack + Weapon + SmoothTween + ReturnHome")
+print("[COMBINED v10.2] GlobalBoss + Chihora + Yhwach + AutoAttack + Weapon + SmoothTween + DashBypass")
