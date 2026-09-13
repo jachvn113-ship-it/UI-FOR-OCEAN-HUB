@@ -1,5 +1,5 @@
 -- ============================================================
--- COMBINED v10.3 - FIX CHIHORA LOOP + SMOOTH TWEEN + DASH BYPASS
+-- COMBINED v10.5 - FIX CONFLICT TWEEN B/C + SHARED TWEENHELPER
 -- ============================================================
 
 local Players           = game:GetService("Players")
@@ -9,9 +9,6 @@ local Workspace         = game:GetService("Workspace")
 local RunService        = game:GetService("RunService")
 local LocalPlayer       = Players.LocalPlayer
 
--- ============================================================
--- STATE
--- ============================================================
 local State = {
     GlobalBoss    = true,
     Chihora       = true,
@@ -83,7 +80,7 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- SMOOTH TWEEN HELPER (đã fix)
+-- SMOOTH TWEEN HELPER
 -- ============================================================
 local TweenHelper = {}
 TweenHelper.__index = TweenHelper
@@ -156,7 +153,6 @@ local function computeDuration(dist, speed)
     return base * jitter
 end
 
--- Low-level move, dùng nội bộ
 function TweenHelper:_move(targetCFrame, speed, onDone)
     if not self.hrp then return end
     self:cancel()
@@ -166,6 +162,7 @@ function TweenHelper:_move(targetCFrame, speed, onDone)
     local dist = (self.hrp.Position - targetCFrame.Position).Magnitude
 
     local function finish()
+        self.activeTween = nil       -- ✅ clear để isMoving trả về false
         self:endMove()
         if onDone then onDone() end
     end
@@ -214,28 +211,15 @@ function TweenHelper:_move(targetCFrame, speed, onDone)
     end
 end
 
--- Di chuyển tới target (không phải home)
 function TweenHelper:moveToTarget(targetCFrame, speed, onDone)
     self.returning = false
     self:_move(targetCFrame, speed, onDone)
 end
 
--- Kiểm tra có cần move lại không
-function TweenHelper:needsMove(targetCFrame, threshold, maxDrift)
-    threshold = threshold or 3
-    maxDrift  = maxDrift  or 6
-    if not self.lastTarget then return true end
-    if (self.lastTarget.Position - targetCFrame.Position).Magnitude > threshold then
-        return true
-    end
-    if self.hrp then
-        local dist = (self.hrp.Position - targetCFrame.Position).Magnitude
-        if dist > maxDrift then return true end
-    end
-    return false
+function TweenHelper:isMoving()
+    return self.activeTween ~= nil
 end
 
--- Về home (chống re-entry)
 function TweenHelper:goHome(speed, onDone)
     if not self.home or not self.hrp then
         if onDone then onDone() end
@@ -250,6 +234,21 @@ function TweenHelper:goHome(speed, onDone)
         self.lastTarget = nil
         if onDone then onDone() end
     end)
+end
+
+-- ============================================================
+-- GLOBAL TWEEN HELPER (dùng chung cho PART B và PART C)
+-- ============================================================
+local GlobalTweenH = nil
+
+local function getGlobalTweenH()
+    local char = LocalPlayer.Character
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    if GlobalTweenH == nil or GlobalTweenH.hrp ~= hrp then
+        GlobalTweenH = TweenHelper.new(hrp)
+    end
+    return GlobalTweenH
 end
 
 -- ============================================================
@@ -280,7 +279,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 44)
 title.BackgroundColor3 = Color3.fromRGB(35, 35, 46)
 title.BorderSizePixel = 0
-title.Text = "⚙  AUTO CONTROLS v10.3"
+title.Text = "⚙  AUTO CONTROLS v10.5"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 18
@@ -289,7 +288,6 @@ do
     local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 12); c.Parent = title
 end
 
--- ===== TOGGLES =====
 local toggleHolder = Instance.new("Frame")
 toggleHolder.Size = UDim2.new(1, -24, 0, 222)
 toggleHolder.Position = UDim2.new(0, 12, 0, 54)
@@ -671,6 +669,16 @@ local function refreshCache(force)
     Cache.npcsFolder    = Workspace:FindFirstChild("NPCs")
 end
 
+-- Helper check Chihora đang active không (dùng chung cho B và C)
+local function isChihoraActive()
+    if not State.Chihora then return false end
+    refreshCache()
+    local ch = Cache.enemiesFolder and Cache.enemiesFolder:FindFirstChild("Chihora")
+    if not ch then return false end
+    local h = ch:FindFirstChildOfClass("Humanoid")
+    return (h == nil) or (h.Health > 0)
+end
+
 -- ============================================================
 -- PART A: AUTO GLOBAL BOSS
 -- ============================================================
@@ -705,14 +713,13 @@ task.spawn(function()
     local COOLDOWN, JOIN_DEBOUNCE, REFRESH_DEBOUNCE = 0.5, 1.0, 1.5
     local queued = false
     local lastJoinAt, lastRefreshAt = 0, 0
-    local lastLogAt = 0
 
     local function contains(t, kw)
         if type(t) ~= "string" or type(kw) ~= "string" then return false end
         return string.find(string.lower(t), string.lower(kw), 1, true) ~= nil
     end
 
-    local function fireButton(btn, tag)
+    local function fireButton(btn)
         if not btn or not btn.Visible then return false end
         pcall(function()
             if btn:IsA("TextButton") or btn:IsA("ImageButton") then
@@ -774,25 +781,21 @@ task.spawn(function()
             local statusText = (StatusLabel and StatusLabel.Text) or ""
             local titleText  = (TitleLabel  and TitleLabel.Text)  or ""
 
-            if isOk(statusText) then
-                queued = true
-            else
-                queued = false
-            end
+            queued = isOk(statusText)
 
             local hasErr, kw = isErr(statusText)
             if not hasErr then hasErr, kw = isErr(titleText) end
 
             if hasErr and RefreshBtn and RefreshBtn.Visible and (now - lastRefreshAt) > REFRESH_DEBOUNCE then
                 lastRefreshAt = now
-                fireButton(RefreshBtn, "Refresh")
+                fireButton(RefreshBtn)
             end
 
             if not queued and (now - lastJoinAt) > JOIN_DEBOUNCE then
                 if OfferJoin and OfferJoin.Visible then
-                    if fireButton(OfferJoin, "OfferJoin") then lastJoinAt = now end
+                    if fireButton(OfferJoin) then lastJoinAt = now end
                 elseif PartyJoin and PartyJoin.Visible then
-                    if fireButton(PartyJoin, "PartyJoin") then lastJoinAt = now end
+                    if fireButton(PartyJoin) then lastJoinAt = now end
                 end
             end
 
@@ -802,37 +805,31 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- PART B: YHWACH (đã fix)
+-- PART B: YHWACH (nhường PART C khi có Chihora)
 -- ============================================================
 task.spawn(function()
     local CHECK_SLOW, CHECK_FAST = 5, 0.5
     local MOVE_SPEED   = 55
     local RETURN_SPEED = 45
     local STANDOFF     = 14
+    local FARM_RADIUS  = 22
 
-    local tweenH   = nil
     local yhwachOn = false
 
     while true do
-        local character = LocalPlayer.Character
-        local myRoot    = character and character:FindFirstChild("HumanoidRootPart")
-        local humanoid  = character and character:FindFirstChildOfClass("Humanoid")
+        local tweenH = getGlobalTweenH()
+        local chihoraBusy = isChihoraActive()   -- ✅ nếu Chihora đang active, PART B nhường
 
-        if tweenH == nil or tweenH.hrp ~= myRoot then
-            tweenH = TweenHelper.new(myRoot)
-        else
-            tweenH:setHrp(myRoot)
-        end
-
-        if not State.Yhwach then
+        if not State.Yhwach or chihoraBusy then
             if yhwachOn then
                 yhwachOn = false
+                local char = LocalPlayer.Character
+                local humanoid = char and char:FindFirstChildOfClass("Humanoid")
                 if humanoid then humanoid.PlatformStand = false end
-                tweenH:abort()
-                if tweenH.home then tweenH:goHome(RETURN_SPEED) end
+                -- Không goHome — để PART C hoặc toggle tắt xử lý
             end
-            task.wait(0.5)
-        else
+            task.wait(chihoraBusy and 0.3 or 0.5)
+        elseif tweenH then
             refreshCache()
             local yhwach = Cache.enemiesFolder and Cache.enemiesFolder:FindFirstChild("Yhwach")
             local alive = false
@@ -841,7 +838,7 @@ task.spawn(function()
                 alive = (hum == nil) or (hum.Health > 0)
             end
 
-            if myRoot and yhwach and alive then
+            if yhwach and alive then
                 local targetRoot = yhwach:FindFirstChild("HumanoidRootPart")
                     or yhwach.PrimaryPart
                     or yhwach:FindFirstChild("Torso")
@@ -850,31 +847,50 @@ task.spawn(function()
                 if targetRoot then
                     tweenH:saveHome()
                     yhwachOn = true
+                    local char = LocalPlayer.Character
+                    local humanoid = char and char:FindFirstChildOfClass("Humanoid")
                     if humanoid then humanoid.PlatformStand = true end
 
-                    local offsetBack = STANDOFF + (math.random() - 0.5) * 4
-                    local offsetSide = (math.random() - 0.5) * 6
-                    local backPos = (targetRoot.CFrame * CFrame.new(offsetSide, 0, offsetBack)).Position
-                    local goalCF  = CFrame.new(backPos, targetRoot.Position)
+                    local myPos    = tweenH.hrp.Position
+                    local enemyPos = targetRoot.Position
+                    local dx, dy, dz = myPos.X - enemyPos.X, myPos.Y - enemyPos.Y, myPos.Z - enemyPos.Z
+                    local dist = math.sqrt(dx*dx + dy*dy + dz*dz)
 
-                    if tweenH.returning or tweenH:needsMove(goalCF, 4, 8) then
-                        tweenH:moveToTarget(goalCF, MOVE_SPEED)
+                    if dist > FARM_RADIUS then
+                        local ux, uy, uz
+                        if dist < 0.5 then ux, uy, uz = 1, 0, 0
+                        else ux, uy, uz = dx/dist, dy/dist, dz/dist end
+
+                        local targetPos = Vector3.new(
+                            enemyPos.X + ux * STANDOFF,
+                            enemyPos.Y + uy * STANDOFF,
+                            enemyPos.Z + uz * STANDOFF
+                        )
+                        local goalCF = CFrame.new(targetPos, enemyPos)
+
+                        if not tweenH:isMoving() then
+                            tweenH:moveToTarget(goalCF, MOVE_SPEED)
+                        end
                     end
                 end
             else
                 if yhwachOn then
                     yhwachOn = false
+                    local char = LocalPlayer.Character
+                    local humanoid = char and char:FindFirstChildOfClass("Humanoid")
                     if humanoid then humanoid.PlatformStand = false end
                     if tweenH.home then tweenH:goHome(RETURN_SPEED) end
                 end
             end
             task.wait(yhwachOn and CHECK_FAST or CHECK_SLOW)
+        else
+            task.wait(0.3)
         end
     end
 end)
 
 -- ============================================================
--- PART C: NPC + SPAWN BOSS + CHIHORA (đã fix)
+-- PART C: NPC + SPAWN BOSS + CHIHORA
 -- ============================================================
 task.spawn(function()
     local Remotes   = ReplicatedStorage:WaitForChild("Remotes", 30)
@@ -895,12 +911,12 @@ task.spawn(function()
     local MOVE_SPEED       = 55
     local RETURN_SPEED     = 45
     local BOSS_STANDOFF    = 12
+    local FARM_RADIUS      = 22
     local NPC_RETWEEN_DIST = 100
     local LOOP_WAIT        = 0.15
-    local LOST_GRACE       = 1.5     -- ✅ debounce khi mất Chihora
+    local LOST_GRACE       = 1.5
 
     local lastCharacter  = nil
-    local tweenH         = nil
     local lastSpawnAt    = 0
     local phase          = "IDLE"
     local lostEnemyAt    = nil
@@ -931,9 +947,15 @@ task.spawn(function()
             if phase ~= "OFF" then
                 phase       = "OFF"
                 lostEnemyAt = nil
+                local tweenH = getGlobalTweenH()
                 if tweenH then
-                    tweenH:abort()
-                    if tweenH.home then tweenH:goHome(RETURN_SPEED) end
+                    local char = LocalPlayer.Character
+                    local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+                    if humanoid then humanoid.PlatformStand = false end
+                    -- ✅ chỉ goHome khi thực sự tắt Chihora VÀ không bật Yhwach
+                    if not State.Yhwach and tweenH.home then
+                        tweenH:goHome(RETURN_SPEED)
+                    end
                 end
             end
             task.wait(0.5)
@@ -942,13 +964,13 @@ task.spawn(function()
                 local char = LocalPlayer.Character
                 local hrp  = char and char:FindFirstChild("HumanoidRootPart")
 
+                local tweenH = getGlobalTweenH()
+                if not tweenH then return end
+
                 if char ~= lastCharacter then
                     lastCharacter = char
-                    tweenH        = TweenHelper.new(hrp)
                     phase         = "IDLE"
                     lostEnemyAt   = nil
-                else
-                    tweenH:setHrp(hrp)
                 end
 
                 if not hrp then return end
@@ -962,7 +984,6 @@ task.spawn(function()
                 end
 
                 if chihora and chihoraAlive then
-                    -- ✅ reset debounce
                     lostEnemyAt = nil
                     tweenH:saveHome()
                     phase = "TO_BOSS"
@@ -971,33 +992,31 @@ task.spawn(function()
                     if enemyRoot then
                         local myPos, enemyPos = hrp.Position, enemyRoot.Position
                         local dx, dy, dz = myPos.X - enemyPos.X, myPos.Y - enemyPos.Y, myPos.Z - enemyPos.Z
-                        local mag = math.sqrt(dx*dx + dy*dy + dz*dz)
-                        local ux, uy, uz
-                        if mag < 0.5 then ux, uy, uz = 1, 0, 0
-                        else ux, uy, uz = dx/mag, dy/mag, dz/mag end
+                        local dist = math.sqrt(dx*dx + dy*dy + dz*dz)
 
-                        local jitter = 1 + (math.random() - 0.5) * 0.25
-                        local tx = enemyPos.X + ux * BOSS_STANDOFF * jitter
-                        local ty = enemyPos.Y + uy * BOSS_STANDOFF * jitter
-                        local tz = enemyPos.Z + uz * BOSS_STANDOFF * jitter
-                        local targetCF = CFrame.new(Vector3.new(tx, ty, tz), enemyPos)
+                        if dist > FARM_RADIUS then
+                            local ux, uy, uz
+                            if dist < 0.5 then ux, uy, uz = 1, 0, 0
+                            else ux, uy, uz = dx/dist, dy/dist, dz/dist end
 
-                        -- ✅ chỉ move khi cần
-                        if tweenH.returning or tweenH:needsMove(targetCF, 3, 8) then
-                            tweenH:moveToTarget(targetCF, MOVE_SPEED)
+                            local targetPos = Vector3.new(
+                                enemyPos.X + ux * BOSS_STANDOFF,
+                                enemyPos.Y + uy * BOSS_STANDOFF,
+                                enemyPos.Z + uz * BOSS_STANDOFF
+                            )
+                            local targetCF = CFrame.new(targetPos, enemyPos)
+
+                            if not tweenH:isMoving() then
+                                tweenH:moveToTarget(targetCF, MOVE_SPEED)
+                            end
                         end
                     end
                 else
-                    -- ✅ debounce: chỉ goHome khi boss mất hẳn > LOST_GRACE
                     if not lostEnemyAt then
                         lostEnemyAt = os.clock()
                     end
 
                     if os.clock() - lostEnemyAt >= LOST_GRACE then
-                        if tweenH.home and not tweenH.returning then
-                            tweenH:goHome(RETURN_SPEED)
-                        end
-
                         local npcRoot = getNpcRoot()
                         if npcRoot then
                             local npcPos = npcRoot.Position
@@ -1005,12 +1024,13 @@ task.spawn(function()
                             local dx, dy, dz = myPos.X - npcPos.X, myPos.Y - npcPos.Y, myPos.Z - npcPos.Z
                             local dist = math.sqrt(dx*dx + dy*dy + dz*dz)
 
-                            if dist >= NPC_RETWEEN_DIST and not tweenH.returning then
+                            if dist >= NPC_RETWEEN_DIST then
                                 phase = "TO_NPC"
                                 local lookVec = Vector3.new(npcPos.X - myPos.X, npcPos.Y - myPos.Y, npcPos.Z - myPos.Z)
                                 if lookVec.Magnitude < 0.5 then lookVec = Vector3.new(1, 0, 0) end
                                 local targetCF = CFrame.new(npcPos, npcPos + lookVec)
-                                if tweenH:needsMove(targetCF, 4, 8) then
+
+                                if not tweenH:isMoving() then
                                     tweenH:moveToTarget(targetCF, MOVE_SPEED)
                                 end
                             else
@@ -1027,4 +1047,4 @@ task.spawn(function()
     end
 end)
 
-print("[COMBINED v10.3] GlobalBoss + Chihora(fixed) + Yhwach(fixed) + AutoAttack + Weapon + SmoothTween + DashBypass")
+print("[COMBINED v10.5] GlobalBoss + Chihora + Yhwach + AutoAttack + Weapon + SmoothTween + DashBypass + SharedTweenHelper")
