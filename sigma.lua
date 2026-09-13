@@ -1,5 +1,5 @@
 -- ============================================================
--- COMBINED v10 - AUTO ATTACK + FIX JOIN BUTTON + DEBUG
+-- COMBINED v10.1 - SMOOTH TWEEN + RETURN HOME
 -- ============================================================
 
 local Players           = game:GetService("Players")
@@ -16,15 +16,138 @@ local State = {
     GlobalBoss    = true,
     Chihora       = true,
     Yhwach        = true,
-    AutoAttack    = false,   -- ✅ Toggle mới
-    AttackRate    = 0.1,     -- giây/lần chém
+    AutoAttack    = false,
+    AttackRate    = 0.1,
     Weapon        = nil,
     SpawnInterval = 0.75,
     DebugMode     = true,
 }
 
 -- ============================================================
--- UI
+-- SMOOTH TWEEN HELPER (chống detect + return home)
+-- ============================================================
+local TweenHelper = {}
+TweenHelper.__index = TweenHelper
+
+local MIN_DURATION = 0.35          -- tween tối thiểu (không teleport tức thời)
+local MIN_SPEED    = 12            -- studs/s tối thiểu khi speed quá thấp
+
+function TweenHelper.new(hrp)
+    local self = setmetatable({}, TweenHelper)
+    self.hrp         = hrp
+    self.home        = nil         -- vị trí gốc lưu lại
+    self.activeTween = nil
+    self.returning   = false
+    return self
+end
+
+function TweenHelper:setHrp(hrp)
+    if hrp ~= self.hrp then
+        self.hrp = hrp
+        self.home = nil            -- reset home khi đổi nhân vật
+        self:cancel()
+    end
+end
+
+-- Lưu vị trí gốc (chỉ lưu 1 lần cho tới khi clearHome)
+function TweenHelper:saveHome()
+    if self.hrp and not self.home then
+        self.home = self.hrp.CFrame
+    end
+end
+
+function TweenHelper:clearHome()
+    self.home = nil
+end
+
+function TweenHelper:cancel()
+    if self.activeTween then
+        pcall(function() self.activeTween:Cancel() end)
+        self.activeTween = nil
+    end
+end
+
+-- Tính duration có jitter để tránh pattern cố định
+local function computeDuration(dist, speed)
+    if not speed or speed < MIN_SPEED then speed = MIN_SPEED end
+    local base = dist / speed
+    if base < MIN_DURATION then base = MIN_DURATION end
+    -- jitter ±15%
+    local jitter = 1 + (math.random() - 0.5) * 0.30
+    return base * jitter
+end
+
+-- Tween mượt: Sine InOut + jitter, chia 2 chặng để tự nhiên
+function TweenHelper:move(targetCFrame, speed, onDone)
+    if not self.hrp then return end
+    self:cancel()
+    self.returning = false
+
+    local dist = (self.hrp.Position - targetCFrame.Position).Magnitude
+    if dist < 0.5 then
+        -- đã ở gần đích → set nhẹ để không teleport
+        local dur = MIN_DURATION
+        self.activeTween = TweenService:Create(
+            self.hrp,
+            TweenInfo.new(dur, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
+            { CFrame = targetCFrame }
+        )
+    else
+        -- Chia 2 chặng: chặng đầu nhanh hơn (Quad Out), chặng 2 chậm lại (Sine InOut)
+        -- để giống chuyển động người thật, không bị "snap"
+        local midPos = self.hrp.Position:Lerp(targetCFrame.Position, 0.65)
+        local midCF  = CFrame.new(midPos, targetCFrame.Position)
+        local dur1   = computeDuration((self.hrp.Position - midPos).Magnitude, speed * 1.1)
+        local dur2   = computeDuration((midPos - targetCFrame.Position).Magnitude, speed * 0.9)
+
+        local tween1 = TweenService:Create(
+            self.hrp,
+            TweenInfo.new(dur1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+            { CFrame = midCF }
+        )
+        local tween2 = TweenService:Create(
+            self.hrp,
+            TweenInfo.new(dur2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
+            { CFrame = targetCFrame }
+        )
+
+        self.activeTween = tween1
+        tween1.Completed:Connect(function(st)
+            if st ~= Enum.PlaybackState.Completed then return end
+            if not self.hrp then return end
+            self.activeTween = tween2
+            tween2:Play()
+            if onDone then
+                tween2.Completed:Connect(function(st2)
+                    if st2 == Enum.PlaybackState.Completed and onDone then onDone() end
+                end)
+            end
+        end)
+    end
+
+    self.activeTween:Play()
+    if onDone and not self.activeTween.Completed then
+        -- fallback cho nhánh dist < 0.5
+    end
+end
+
+-- Quay về vị trí gốc mượt mà
+function TweenHelper:goHome(speed, onDone)
+    if not self.home or not self.hrp then
+        if onDone then onDone() end
+        return
+    end
+    self.returning = true
+    local homeCF = self.home
+    self:move(homeCF, speed or 40, function()
+        self.home = nil
+        self.returning = false
+        if onDone then onDone() end
+    end)
+end
+
+-- ============================================================
+-- UI (giữ nguyên)
 -- ============================================================
 local pg = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -51,7 +174,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 44)
 title.BackgroundColor3 = Color3.fromRGB(35, 35, 46)
 title.BorderSizePixel = 0
-title.Text = "⚙  AUTO CONTROLS v10"
+title.Text = "⚙  AUTO CONTROLS v10.1"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 18
@@ -60,7 +183,7 @@ do
     local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 12); c.Parent = title
 end
 
--- ===== TOGGLES (4 cái) =====
+-- ===== TOGGLES =====
 local toggleHolder = Instance.new("Frame")
 toggleHolder.Size = UDim2.new(1, -24, 0, 176)
 toggleHolder.Position = UDim2.new(0, 12, 0, 54)
@@ -127,7 +250,7 @@ end
 makeToggle("Global Boss", "GlobalBoss", 1)
 makeToggle("Chihora",     "Chihora",    2)
 makeToggle("Yhwach",      "Yhwach",     3)
-makeToggle("Auto Attack", "AutoAttack", 4)   -- ✅ Toggle mới
+makeToggle("Auto Attack", "AutoAttack", 4)
 
 -- ===== SPAWN INTERVAL =====
 local intFrame = Instance.new("Frame")
@@ -356,30 +479,26 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- ✅ PART MỚI: AUTO ATTACK
+-- AUTO ATTACK
 -- ============================================================
 task.spawn(function()
     local vim = game:GetService("VirtualInputManager")
 
-    -- Danh sách hàm attack theo thứ tự ưu tiên
     local function doOneAttack()
         local char = LocalPlayer.Character
         if not char then return false end
 
-        -- Ưu tiên 1: Activate tool trực tiếp (an toàn nhất, không gây nhảy chuột)
         local tool = char:FindFirstChildOfClass("Tool")
         if tool then
             local ok = pcall(function() tool:Activate() end)
             if ok then return true end
         end
 
-        -- Ưu tiên 2: mouse1click (executor function, phổ biến)
         if typeof(mouse1click) == "function" then
             pcall(mouse1click)
             return true
         end
 
-        -- Ưu tiên 3: mouse1press + mouse1release
         if typeof(mouse1press) == "function" and typeof(mouse1release) == "function" then
             pcall(function()
                 mouse1press()
@@ -389,7 +508,6 @@ task.spawn(function()
             return true
         end
 
-        -- Ưu tiên 4: VirtualInputManager (yêu cầu executor uy tín)
         if vim then
             pcall(function()
                 vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
@@ -444,7 +562,7 @@ local function refreshCache(force)
 end
 
 -- ============================================================
--- PART A: AUTO GLOBAL BOSS (đã fix)
+-- PART A: AUTO GLOBAL BOSS
 -- ============================================================
 task.spawn(function()
     local prompt = pg:WaitForChild("GlobalBossPrompt", 30)
@@ -611,35 +729,39 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- PART B: YHWACH
+-- PART B: YHWACH (smooth + return home)
 -- ============================================================
 task.spawn(function()
     local CHECK_SLOW, CHECK_FAST = 5, 0.5
-    local TWEEN_DISTANCE, TWEEN_TIME = 20, 1
-    local tweenInfo = TweenInfo.new(TWEEN_TIME, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
-    local currentTween, yhwachPresent = nil, false
+    local MOVE_SPEED   = 55      -- studs/s (mượt hơn, không teleport)
+    local RETURN_SPEED = 45
+    local STANDOFF     = 14
 
-    local function stopTween()
-        if currentTween then
-            pcall(function() currentTween:Cancel() end)
-            currentTween = nil
-        end
-    end
+    local tweenH    = nil
+    local yhwachOn  = false
 
     while true do
+        local character = LocalPlayer.Character
+        local myRoot    = character and character:FindFirstChild("HumanoidRootPart")
+        local humanoid  = character and character:FindFirstChildOfClass("Humanoid")
+
+        if tweenH == nil or tweenH.hrp ~= myRoot then
+            tweenH = TweenHelper.new(myRoot)
+        else
+            tweenH:setHrp(myRoot)
+        end
+
         if not State.Yhwach then
-            if yhwachPresent then
-                yhwachPresent = false
-                stopTween()
-                local ch = LocalPlayer.Character
-                local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-                if hum then hum.PlatformStand = false end
+            if yhwachOn then
+                yhwachOn = false
+                if humanoid then humanoid.PlatformStand = false end
+                -- Quay về chỗ cũ khi tắt
+                if tweenH.home then
+                    tweenH:goHome(RETURN_SPEED)
+                end
             end
             task.wait(0.5)
         else
-            local character = LocalPlayer.Character
-            local myRoot    = character and character:FindFirstChild("HumanoidRootPart")
-            local humanoid  = character and character:FindFirstChild("Humanoid")
             refreshCache()
             local yhwach = Cache.enemiesFolder and Cache.enemiesFolder:FindFirstChild("Yhwach")
             local alive = false
@@ -647,34 +769,44 @@ task.spawn(function()
                 local hum = yhwach:FindFirstChildOfClass("Humanoid")
                 alive = (hum == nil) or (hum.Health > 0)
             end
+
             if myRoot and yhwach and alive then
                 local targetRoot = yhwach:FindFirstChild("HumanoidRootPart")
                     or yhwach.PrimaryPart
                     or yhwach:FindFirstChild("Torso")
                     or yhwach:FindFirstChild("UpperTorso")
+
                 if targetRoot then
-                    yhwachPresent = true
-                    local backPosition = (targetRoot.CFrame * CFrame.new(0, 0, TWEEN_DISTANCE)).Position
-                    local goalCFrame   = CFrame.new(backPosition, targetRoot.Position)
+                    -- Lưu vị trí gốc lần đầu bám boss
+                    tweenH:saveHome()
+                    yhwachOn = true
                     if humanoid then humanoid.PlatformStand = true end
-                    stopTween()
-                    currentTween = TweenService:Create(myRoot, tweenInfo, { CFrame = goalCFrame })
-                    currentTween:Play()
+
+                    -- Tính điểm đứng sau lưng, có offset ngẫu nhiên nhẹ
+                    local offsetBack  = STANDOFF + (math.random() - 0.5) * 4
+                    local offsetSide  = (math.random() - 0.5) * 6
+                    local backPos = (targetRoot.CFrame * CFrame.new(offsetSide, 0, offsetBack)).Position
+                    local goalCF  = CFrame.new(backPos, targetRoot.Position)
+
+                    tweenH:move(goalCF, MOVE_SPEED)
                 end
             else
-                if yhwachPresent then
-                    yhwachPresent = false
-                    stopTween()
+                if yhwachOn then
+                    yhwachOn = false
+                    if humanoid then humanoid.PlatformStand = false end
+                    -- Boss chết / biến mất → về chỗ cũ
+                    if tweenH.home then
+                        tweenH:goHome(RETURN_SPEED)
+                    end
                 end
-                if humanoid then humanoid.PlatformStand = false end
             end
-            task.wait(yhwachPresent and CHECK_FAST or CHECK_SLOW)
+            task.wait(yhwachOn and CHECK_FAST or CHECK_SLOW)
         end
     end
 end)
 
 -- ============================================================
--- PART C: NPC + SPAWN BOSS + CHIHORA
+-- PART C: NPC + SPAWN BOSS + CHIHORA (smooth + return home)
 -- ============================================================
 task.spawn(function()
     local Remotes   = ReplicatedStorage:WaitForChild("Remotes", 30)
@@ -692,42 +824,16 @@ task.spawn(function()
         end
     end)
 
-    local TWEEN_SPEED      = 50
-    local ARRIVE_DIST      = 6
-    local BOSS_STANDOFF    = 10
-    local LOOP_WAIT        = 0.15
+    local MOVE_SPEED       = 55
+    local RETURN_SPEED     = 45
+    local BOSS_STANDOFF    = 12
     local NPC_RETWEEN_DIST = 100
-    local BOSS_TWEEN_CD    = 5
+    local LOOP_WAIT        = 0.15
 
-    local lastCharacter   = nil
-    local currentTween    = nil
-    local npcTweenActive  = false
-    local lastSpawnAt     = 0
-    local lastBossTweenAt = 0
-    local phase           = "IDLE"
-
-    local function stopTween()
-        if currentTween then
-            pcall(function() currentTween:Cancel() end)
-            currentTween = nil
-        end
-    end
-
-    local function tweenAtSpeed(hrp, targetCFrame, speed, onDone)
-        local dist = (hrp.Position - targetCFrame.Position).Magnitude
-        local duration = math.max(dist / speed, 0.05)
-        stopTween()
-        currentTween = TweenService:Create(
-            hrp, TweenInfo.new(duration, Enum.EasingStyle.Linear),
-            { CFrame = targetCFrame }
-        )
-        if onDone then
-            currentTween.Completed:Connect(function(state)
-                if state == Enum.PlaybackState.Completed then onDone() end
-            end)
-        end
-        currentTween:Play()
-    end
+    local lastCharacter  = nil
+    local tweenH         = nil
+    local lastSpawnAt    = 0
+    local phase          = "IDLE"
 
     local function trySpawnBoss(now)
         local interval = State.SpawnInterval or 0.75
@@ -754,74 +860,78 @@ task.spawn(function()
         if not State.Chihora then
             if phase ~= "OFF" then
                 phase = "OFF"
-                stopTween()
-                npcTweenActive = false
+                if tweenH and tweenH.home then
+                    tweenH:goHome(RETURN_SPEED)
+                end
             end
             task.wait(0.5)
         else
             local ok, err = pcall(function()
                 local char = LocalPlayer.Character
                 local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+
                 if char ~= lastCharacter then
-                    lastCharacter   = char
-                    npcTweenActive  = false
-                    lastBossTweenAt = 0
-                    phase           = "IDLE"
-                    stopTween()
+                    lastCharacter = char
+                    tweenH        = TweenHelper.new(hrp)
+                    phase         = "IDLE"
+                else
+                    tweenH:setHrp(hrp)
                 end
+
                 if not hrp then return end
                 refreshCache()
+
                 local chihora = Cache.enemiesFolder and Cache.enemiesFolder:FindFirstChild("Chihora")
                 local chihoraAlive = false
                 if chihora then
                     local hum = chihora:FindFirstChildOfClass("Humanoid")
                     chihoraAlive = (hum == nil) or (hum.Health > 0)
                 end
+
                 if chihora and chihoraAlive then
-                    if phase ~= "TO_BOSS" then
-                        phase = "TO_BOSS"
-                        lastBossTweenAt = 0
-                    end
-                    local now = os.clock()
-                    if now - lastBossTweenAt >= BOSS_TWEEN_CD then
-                        lastBossTweenAt = now
-                        local enemyRoot = chihora:FindFirstChild("HumanoidRootPart") or chihora.PrimaryPart
-                        if enemyRoot then
-                            local myPos, enemyPos = hrp.Position, enemyRoot.Position
-                            local dx, dy, dz = myPos.X - enemyPos.X, myPos.Y - enemyPos.Y, myPos.Z - enemyPos.Z
-                            local mag = math.sqrt(dx*dx + dy*dy + dz*dz)
-                            local ux, uy, uz
-                            if mag < 0.5 then ux, uy, uz = 1, 0, 0
-                            else ux, uy, uz = dx/mag, dy/mag, dz/mag end
-                            local tx = enemyPos.X + ux * BOSS_STANDOFF
-                            local ty = enemyPos.Y + uy * BOSS_STANDOFF
-                            local tz = enemyPos.Z + uz * BOSS_STANDOFF
-                            local targetCF = CFrame.new(Vector3.new(tx, ty, tz), enemyPos)
-                            tweenAtSpeed(hrp, targetCF, TWEEN_SPEED)
-                        end
+                    -- Lưu vị trí gốc lần đầu lao vào boss
+                    tweenH:saveHome()
+                    phase = "TO_BOSS"
+
+                    local enemyRoot = chihora:FindFirstChild("HumanoidRootPart") or chihora.PrimaryPart
+                    if enemyRoot then
+                        local myPos, enemyPos = hrp.Position, enemyRoot.Position
+                        local dx, dy, dz = myPos.X - enemyPos.X, myPos.Y - enemyPos.Y, myPos.Z - enemyPos.Z
+                        local mag = math.sqrt(dx*dx + dy*dy + dz*dz)
+                        local ux, uy, uz
+                        if mag < 0.5 then ux, uy, uz = 1, 0, 0
+                        else ux, uy, uz = dx/mag, dy/mag, dz/mag end
+
+                        -- Offset ngẫu nhiên nhẹ để không đứng y 1 chỗ
+                        local jitter = 1 + (math.random() - 0.5) * 0.25
+                        local tx = enemyPos.X + ux * BOSS_STANDOFF * jitter
+                        local ty = enemyPos.Y + uy * BOSS_STANDOFF * jitter
+                        local tz = enemyPos.Z + uz * BOSS_STANDOFF * jitter
+                        local targetCF = CFrame.new(Vector3.new(tx, ty, tz), enemyPos)
+
+                        tweenH:move(targetCF, MOVE_SPEED)
                     end
                 else
+                    -- Không còn boss → về vị trí gốc trước khi làm việc khác
+                    if tweenH.home and not tweenH.returning then
+                        tweenH:goHome(RETURN_SPEED)
+                    end
+
                     local npcRoot = getNpcRoot()
                     if npcRoot then
                         local npcPos = npcRoot.Position
                         local myPos  = hrp.Position
                         local dx, dy, dz = myPos.X - npcPos.X, myPos.Y - npcPos.Y, myPos.Z - npcPos.Z
                         local dist = math.sqrt(dx*dx + dy*dy + dz*dz)
-                        if dist >= NPC_RETWEEN_DIST and not npcTweenActive then
-                            npcTweenActive = true
+
+                        if dist >= NPC_RETWEEN_DIST and not tweenH.returning then
                             phase = "TO_NPC"
                             local lookVec = Vector3.new(npcPos.X - myPos.X, npcPos.Y - myPos.Y, npcPos.Z - myPos.Z)
                             if lookVec.Magnitude < 0.5 then lookVec = Vector3.new(1, 0, 0) end
                             local targetCF = CFrame.new(npcPos, npcPos + lookVec)
-                            tweenAtSpeed(hrp, targetCF, TWEEN_SPEED, function()
-                                npcTweenActive = false
-                            end)
-                        elseif npcTweenActive then
-                            -- chờ
+                            tweenH:move(targetCF, MOVE_SPEED)
                         else
-                            if phase ~= "SPAWNING" then
-                                phase = "SPAWNING"
-                            end
+                            phase = "SPAWNING"
                             trySpawnBoss(os.clock())
                         end
                     end
@@ -833,4 +943,4 @@ task.spawn(function()
     end
 end)
 
-print("[COMBINED v10] Đã chạy: GlobalBoss + Chihora + Yhwach + AutoAttack + Weapon + Cache")
+print("[COMBINED v10.1] Đã chạy: GlobalBoss + Chihora + Yhwach + AutoAttack + Weapon + SmoothTween + ReturnHome")
