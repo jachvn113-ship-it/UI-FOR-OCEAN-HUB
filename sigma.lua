@@ -1,5 +1,5 @@
 -- ============================================================
--- COMBINED v10.2 - SMOOTH TWEEN + RETURN HOME + DASH BYPASS
+-- COMBINED v10.3 - FIX CHIHORA LOOP + SMOOTH TWEEN + DASH BYPASS
 -- ============================================================
 
 local Players           = game:GetService("Players")
@@ -21,16 +21,16 @@ local State = {
     Weapon        = nil,
     SpawnInterval = 0.75,
     DebugMode     = true,
-    DashBypass    = true,   -- ✅ spam Dash trong lúc tween
+    DashBypass    = true,
 }
 
 -- ============================================================
--- DASH SPAMMER (chống detect khi tween → không bị kéo về)
+-- DASH SPAMMER
 -- ============================================================
 local DashSpammer = (function()
     local remote       = nil
     local lastFireAt   = 0
-    local FIRE_INTERVAL = 0.05   -- 50ms → ~20 lần/giây
+    local FIRE_INTERVAL = 0.05
     local enabled      = true
 
     local function getRemote()
@@ -65,12 +65,10 @@ local DashSpammer = (function()
     }
 end)()
 
--- Bộ đếm: có bao nhiêu tween đang chạy → quyết định spam Dash
 local inTweenRefs = 0
 local function pushTween() inTweenRefs += 1 end
 local function popTween()  inTweenRefs -= 1; if inTweenRefs < 0 then inTweenRefs = 0 end end
 
--- Vòng lặp spam Dash toàn cục khi có tween hoạt động
 task.spawn(function()
     while true do
         task.wait(0.03)
@@ -85,7 +83,7 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- SMOOTH TWEEN HELPER (chống detect + return home)
+-- SMOOTH TWEEN HELPER (đã fix)
 -- ============================================================
 local TweenHelper = {}
 TweenHelper.__index = TweenHelper
@@ -100,6 +98,7 @@ function TweenHelper.new(hrp)
     self.activeTween = nil
     self.returning   = false
     self.inMove      = false
+    self.lastTarget  = nil
     return self
 end
 
@@ -143,6 +142,12 @@ function TweenHelper:cancel()
     self:endMove()
 end
 
+function TweenHelper:abort()
+    self:cancel()
+    self.returning  = false
+    self.lastTarget = nil
+end
+
 local function computeDuration(dist, speed)
     if not speed or speed < MIN_SPEED then speed = MIN_SPEED end
     local base = dist / speed
@@ -151,11 +156,12 @@ local function computeDuration(dist, speed)
     return base * jitter
 end
 
-function TweenHelper:move(targetCFrame, speed, onDone)
+-- Low-level move, dùng nội bộ
+function TweenHelper:_move(targetCFrame, speed, onDone)
     if not self.hrp then return end
     self:cancel()
-    self.returning = false
     self:beginMove()
+    self.lastTarget = targetCFrame
 
     local dist = (self.hrp.Position - targetCFrame.Position).Magnitude
 
@@ -208,22 +214,46 @@ function TweenHelper:move(targetCFrame, speed, onDone)
     end
 end
 
+-- Di chuyển tới target (không phải home)
+function TweenHelper:moveToTarget(targetCFrame, speed, onDone)
+    self.returning = false
+    self:_move(targetCFrame, speed, onDone)
+end
+
+-- Kiểm tra có cần move lại không
+function TweenHelper:needsMove(targetCFrame, threshold, maxDrift)
+    threshold = threshold or 3
+    maxDrift  = maxDrift  or 6
+    if not self.lastTarget then return true end
+    if (self.lastTarget.Position - targetCFrame.Position).Magnitude > threshold then
+        return true
+    end
+    if self.hrp then
+        local dist = (self.hrp.Position - targetCFrame.Position).Magnitude
+        if dist > maxDrift then return true end
+    end
+    return false
+end
+
+-- Về home (chống re-entry)
 function TweenHelper:goHome(speed, onDone)
     if not self.home or not self.hrp then
         if onDone then onDone() end
         return
     end
+    if self.returning then return end
     self.returning = true
     local homeCF = self.home
-    self:move(homeCF, speed or 40, function()
-        self.home = nil
-        self.returning = false
+    self:_move(homeCF, speed or 40, function()
+        self.home       = nil
+        self.returning  = false
+        self.lastTarget = nil
         if onDone then onDone() end
     end)
 end
 
 -- ============================================================
--- UI (giữ nguyên từ v10.1, thêm toggle Dash Bypass)
+-- UI
 -- ============================================================
 local pg = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -250,7 +280,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 44)
 title.BackgroundColor3 = Color3.fromRGB(35, 35, 46)
 title.BorderSizePixel = 0
-title.Text = "⚙  AUTO CONTROLS v10.2"
+title.Text = "⚙  AUTO CONTROLS v10.3"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 18
@@ -259,7 +289,7 @@ do
     local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 12); c.Parent = title
 end
 
--- ===== TOGGLES (5 cái) =====
+-- ===== TOGGLES =====
 local toggleHolder = Instance.new("Frame")
 toggleHolder.Size = UDim2.new(1, -24, 0, 222)
 toggleHolder.Position = UDim2.new(0, 12, 0, 54)
@@ -330,7 +360,7 @@ makeToggle("Global Boss",  "GlobalBoss",  1)
 makeToggle("Chihora",      "Chihora",     2)
 makeToggle("Yhwach",       "Yhwach",      3)
 makeToggle("Auto Attack",  "AutoAttack",  4)
-makeToggle("Dash Bypass",  "DashBypass",  5)   -- ✅ mới
+makeToggle("Dash Bypass",  "DashBypass",  5)
 
 -- ===== SPAWN INTERVAL =====
 local intFrame = Instance.new("Frame")
@@ -642,7 +672,7 @@ local function refreshCache(force)
 end
 
 -- ============================================================
--- PART A: AUTO GLOBAL BOSS (giữ nguyên)
+-- PART A: AUTO GLOBAL BOSS
 -- ============================================================
 task.spawn(function()
     local prompt = pg:WaitForChild("GlobalBossPrompt", 30)
@@ -772,7 +802,7 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- PART B: YHWACH
+-- PART B: YHWACH (đã fix)
 -- ============================================================
 task.spawn(function()
     local CHECK_SLOW, CHECK_FAST = 5, 0.5
@@ -780,8 +810,8 @@ task.spawn(function()
     local RETURN_SPEED = 45
     local STANDOFF     = 14
 
-    local tweenH    = nil
-    local yhwachOn  = false
+    local tweenH   = nil
+    local yhwachOn = false
 
     while true do
         local character = LocalPlayer.Character
@@ -798,6 +828,7 @@ task.spawn(function()
             if yhwachOn then
                 yhwachOn = false
                 if humanoid then humanoid.PlatformStand = false end
+                tweenH:abort()
                 if tweenH.home then tweenH:goHome(RETURN_SPEED) end
             end
             task.wait(0.5)
@@ -826,7 +857,9 @@ task.spawn(function()
                     local backPos = (targetRoot.CFrame * CFrame.new(offsetSide, 0, offsetBack)).Position
                     local goalCF  = CFrame.new(backPos, targetRoot.Position)
 
-                    tweenH:move(goalCF, MOVE_SPEED)
+                    if tweenH.returning or tweenH:needsMove(goalCF, 4, 8) then
+                        tweenH:moveToTarget(goalCF, MOVE_SPEED)
+                    end
                 end
             else
                 if yhwachOn then
@@ -841,7 +874,7 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- PART C: NPC + SPAWN BOSS + CHIHORA
+-- PART C: NPC + SPAWN BOSS + CHIHORA (đã fix)
 -- ============================================================
 task.spawn(function()
     local Remotes   = ReplicatedStorage:WaitForChild("Remotes", 30)
@@ -864,11 +897,13 @@ task.spawn(function()
     local BOSS_STANDOFF    = 12
     local NPC_RETWEEN_DIST = 100
     local LOOP_WAIT        = 0.15
+    local LOST_GRACE       = 1.5     -- ✅ debounce khi mất Chihora
 
     local lastCharacter  = nil
     local tweenH         = nil
     local lastSpawnAt    = 0
     local phase          = "IDLE"
+    local lostEnemyAt    = nil
 
     local function trySpawnBoss(now)
         local interval = State.SpawnInterval or 0.75
@@ -894,8 +929,12 @@ task.spawn(function()
     while true do
         if not State.Chihora then
             if phase ~= "OFF" then
-                phase = "OFF"
-                if tweenH and tweenH.home then tweenH:goHome(RETURN_SPEED) end
+                phase       = "OFF"
+                lostEnemyAt = nil
+                if tweenH then
+                    tweenH:abort()
+                    if tweenH.home then tweenH:goHome(RETURN_SPEED) end
+                end
             end
             task.wait(0.5)
         else
@@ -907,6 +946,7 @@ task.spawn(function()
                     lastCharacter = char
                     tweenH        = TweenHelper.new(hrp)
                     phase         = "IDLE"
+                    lostEnemyAt   = nil
                 else
                     tweenH:setHrp(hrp)
                 end
@@ -922,6 +962,8 @@ task.spawn(function()
                 end
 
                 if chihora and chihoraAlive then
+                    -- ✅ reset debounce
+                    lostEnemyAt = nil
                     tweenH:saveHome()
                     phase = "TO_BOSS"
 
@@ -940,29 +982,41 @@ task.spawn(function()
                         local tz = enemyPos.Z + uz * BOSS_STANDOFF * jitter
                         local targetCF = CFrame.new(Vector3.new(tx, ty, tz), enemyPos)
 
-                        tweenH:move(targetCF, MOVE_SPEED)
+                        -- ✅ chỉ move khi cần
+                        if tweenH.returning or tweenH:needsMove(targetCF, 3, 8) then
+                            tweenH:moveToTarget(targetCF, MOVE_SPEED)
+                        end
                     end
                 else
-                    if tweenH.home and not tweenH.returning then
-                        tweenH:goHome(RETURN_SPEED)
+                    -- ✅ debounce: chỉ goHome khi boss mất hẳn > LOST_GRACE
+                    if not lostEnemyAt then
+                        lostEnemyAt = os.clock()
                     end
 
-                    local npcRoot = getNpcRoot()
-                    if npcRoot then
-                        local npcPos = npcRoot.Position
-                        local myPos  = hrp.Position
-                        local dx, dy, dz = myPos.X - npcPos.X, myPos.Y - npcPos.Y, myPos.Z - npcPos.Z
-                        local dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+                    if os.clock() - lostEnemyAt >= LOST_GRACE then
+                        if tweenH.home and not tweenH.returning then
+                            tweenH:goHome(RETURN_SPEED)
+                        end
 
-                        if dist >= NPC_RETWEEN_DIST and not tweenH.returning then
-                            phase = "TO_NPC"
-                            local lookVec = Vector3.new(npcPos.X - myPos.X, npcPos.Y - myPos.Y, npcPos.Z - myPos.Z)
-                            if lookVec.Magnitude < 0.5 then lookVec = Vector3.new(1, 0, 0) end
-                            local targetCF = CFrame.new(npcPos, npcPos + lookVec)
-                            tweenH:move(targetCF, MOVE_SPEED)
-                        else
-                            phase = "SPAWNING"
-                            trySpawnBoss(os.clock())
+                        local npcRoot = getNpcRoot()
+                        if npcRoot then
+                            local npcPos = npcRoot.Position
+                            local myPos  = hrp.Position
+                            local dx, dy, dz = myPos.X - npcPos.X, myPos.Y - npcPos.Y, myPos.Z - npcPos.Z
+                            local dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+
+                            if dist >= NPC_RETWEEN_DIST and not tweenH.returning then
+                                phase = "TO_NPC"
+                                local lookVec = Vector3.new(npcPos.X - myPos.X, npcPos.Y - myPos.Y, npcPos.Z - myPos.Z)
+                                if lookVec.Magnitude < 0.5 then lookVec = Vector3.new(1, 0, 0) end
+                                local targetCF = CFrame.new(npcPos, npcPos + lookVec)
+                                if tweenH:needsMove(targetCF, 4, 8) then
+                                    tweenH:moveToTarget(targetCF, MOVE_SPEED)
+                                end
+                            else
+                                phase = "SPAWNING"
+                                trySpawnBoss(os.clock())
+                            end
                         end
                     end
                 end
@@ -973,4 +1027,4 @@ task.spawn(function()
     end
 end)
 
-print("[COMBINED v10.2] GlobalBoss + Chihora + Yhwach + AutoAttack + Weapon + SmoothTween + DashBypass")
+print("[COMBINED v10.3] GlobalBoss + Chihora(fixed) + Yhwach(fixed) + AutoAttack + Weapon + SmoothTween + DashBypass")
