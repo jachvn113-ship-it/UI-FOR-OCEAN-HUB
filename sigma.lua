@@ -957,7 +957,7 @@ task.spawn(function()
     task.spawn(function()
         while true do
             if State.Chihora then
-                pcall(function() GoldShopBuy:FireServer("Boss Ticket", 100) end)
+                pcall(function() GoldShopBuy:FireServer("Boss Ticket", 50) end)
             end
             task.wait(3)
         end
