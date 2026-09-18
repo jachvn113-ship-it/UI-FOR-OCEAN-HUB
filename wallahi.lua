@@ -67,7 +67,7 @@ task.spawn(function()
 				if enemy:IsA("Model") and enemy:FindFirstChild("Humanoid") and enemy:FindFirstChild("HumanoidRootPart") then
 					if enemy.Humanoid.Health > 0 then
 						found = true
-						break -- Chỉ cần tìm thấy 1 con là đủ
+						break
 					end
 				end
 			end
@@ -132,51 +132,7 @@ local function safeTween(hrp, targetCFrame, speed, useDashBypass)
 end
 
 -- ==========================================
--- PHẦN 4: HÀM GOM QUÁI (MOB GATHERING)
--- ==========================================
-local function gatherEnemies(myHrp, gatherOffset)
-	local enemiesFolder = workspace:FindFirstChild("Enemies")
-	if not enemiesFolder then return 0 end
-	
-	local gatherPos = myHrp.CFrame * (gatherOffset or CFrame.new(0, 0, -10))
-	local count = 0
-	
-	for _, enemy in ipairs(enemiesFolder:GetChildren()) do
-		if enemy:IsA("Model") and enemy:FindFirstChild("HumanoidRootPart") and enemy:FindFirstChild("Humanoid") then
-			if enemy.Humanoid.Health > 0 then
-				local enemyHrp = enemy:FindFirstChild("HumanoidRootPart")
-				pcall(function() enemyHrp:SetNetworkOwner(player) end)
-				enemyHrp.CFrame = gatherPos
-				enemyHrp.AssemblyLinearVelocity = Vector3.zero
-				enemyHrp.AssemblyAngularVelocity = Vector3.zero
-				count = count + 1
-			end
-		end
-	end
-	return count
-end
-
-local function lockEnemiesPosition(myHrp, gatherPos)
-	local enemiesFolder = workspace:FindFirstChild("Enemies")
-	if not enemiesFolder then return end
-	
-	for _, enemy in ipairs(enemiesFolder:GetChildren()) do
-		if enemy:IsA("Model") and enemy:FindFirstChild("HumanoidRootPart") and enemy:FindFirstChild("Humanoid") then
-			if enemy.Humanoid.Health > 0 then
-				local enemyHrp = enemy:FindFirstChild("HumanoidRootPart")
-				pcall(function() enemyHrp:SetNetworkOwner(player) end)
-				local dist = (enemyHrp.Position - gatherPos.Position).Magnitude
-				if dist > 5 then
-					enemyHrp.CFrame = gatherPos
-				end
-				enemyHrp.AssemblyLinearVelocity = Vector3.zero
-			end
-		end
-	end
-end
-
--- ==========================================
--- PHẦN 5: CÁC HÀM HỖ TRỢ
+-- PHẦN 4: CÁC HÀM HỖ TRỢ (ĐÃ BỎ GOM QUÁI)
 -- ==========================================
 local function getTarget()
 	local enemiesFolder = workspace:FindFirstChild("Enemies")
@@ -204,16 +160,18 @@ local function fightEnemy(target, myHrp)
 	print("Đánh: " .. target.Name)
 	local enemyHrp = target:FindFirstChild("HumanoidRootPart")
 	
+	-- Tween tới con quái đầu tiên
 	local targetCFrame = enemyHrp.CFrame * CFrame.new(0, 0, 5)
 	safeTween(myHrp, targetCFrame, 300, true)
 	
-	local gatherPos = myHrp.CFrame * CFrame.new(0, 0, -5)
-	
+	-- Vòng lặp đánh
 	while target and target.Parent and target:FindFirstChild("Humanoid") and target.Humanoid.Health > 0 do
-		lockEnemiesPosition(myHrp, gatherPos) -- Liên tục kéo quái về
-		
 		local currentEnemyHrp = target:FindFirstChild("HumanoidRootPart")
 		if currentEnemyHrp then
+			-- Bám theo quái (vì không gom nữa nên phải đuổi theo nó)
+			myHrp.CFrame = currentEnemyHrp.CFrame * CFrame.new(0, 0, 5)
+			
+			-- Spam Dash và các skill
 			pcall(function() remote:FireServer("Dash", currentEnemyHrp.CFrame) end)
 			
 			local worldTool = player.Character:FindFirstChild("The World")
@@ -246,7 +204,7 @@ local function processSeal(sealNum, myHrp)
 	
 	local sealPos = sealObj:IsA("BasePart") and sealObj.Position or sealObj:GetPivot().Position
 	local targetCFrame = CFrame.new(sealPos) * CFrame.new(0, 5, 0)
-	safeTween(myHrp, targetCFrame, 50, true)
+	safeTween(myHrp, targetCFrame, 50, true) -- Tween chậm tới Seal
 	
 	print("Spam Skill V...")
 	local tool = player.Character:FindFirstChild("The World")
@@ -283,9 +241,9 @@ local function processSeal(sealNum, myHrp)
 end
 
 -- ==========================================
--- PHẦN 6: VÒNG LẶP CHÍNH
+-- PHẦN 5: VÒNG LẶP CHÍNH
 -- ==========================================
-print("Đã cài đặt xong! Auto Farm + Mob Gathering...")
+print("Đã cài đặt xong! Auto Farm (Không gom quái)...")
 
 while task.wait(0.5) do
 	local char = player.Character
@@ -303,15 +261,7 @@ while task.wait(0.5) do
 		local enemy = getTarget()
 		if enemy then
 			isBusy = true
-			
-			-- Gom quái trước khi đánh
-			local gathered = gatherEnemies(myHrp, CFrame.new(0, 0, -10))
-			if gathered > 0 then
-				print(string.format("[GATHER] Đã gom %d con quái!", gathered))
-				task.wait(0.3)
-			end
-			
-			fightEnemy(enemy, myHrp)
+			fightEnemy(enemy, myHrp) -- Bỏ hoàn toàn phần gom quái
 			isBusy = false
 		end
 	else
