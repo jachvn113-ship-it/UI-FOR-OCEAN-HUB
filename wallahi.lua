@@ -55,7 +55,7 @@ pcall(function() scanUI(CoreGui) end)
 scanUI(playerGui)
 
 -- ==========================================
--- PHẦN 2: LUỒNG CHẠY NGẦM CHECK QUÁI (TASK.SPAWN)
+-- PHẦN 2: LUỒNG CHẠY NGẦM CHECK QUÁI
 -- ==========================================
 task.spawn(function()
 	while task.wait(0.5) do
@@ -75,11 +75,7 @@ task.spawn(function()
 		
 		if hasEnemies ~= found then
 			hasEnemies = found
-			if hasEnemies then
-				print("[DEBUG] Phát hiện quái trong workspace.Enemies!")
-			else
-				print("[DEBUG] Đã dọn sạch quái trong workspace.Enemies!")
-			end
+			print(hasEnemies and "[DEBUG] Phát hiện quái!" or "[DEBUG] Đã dọn sạch quái!")
 		end
 	end
 end)
@@ -176,7 +172,8 @@ local function fightEnemy(target, myHrp)
 				pcall(function() remote:FireServer("Tool", worldTool, "C", currentEnemyHrp.Position) end)
 			end
 		end
-		task.wait(0.15)
+		-- TỐI ƯU: Giảm từ 0.15 xuống 0.05 để spam nhanh hơn
+		task.wait(0.05) 
 	end
 	print("Đã hạ " .. target.Name)
 end
@@ -199,11 +196,8 @@ local function processSeal(sealNum, myHrp)
 	
 	local sealPos = sealObj:IsA("BasePart") and sealObj.Position or sealObj:GetPivot().Position
 	local targetCFrame = CFrame.new(sealPos) * CFrame.new(0, 5, 0)
-	safeTween(myHrp, targetCFrame, 50, true) -- Tween chậm tới Seal
+	safeTween(myHrp, targetCFrame, 50, true)
 	
-	-- ==========================================
-	-- SPAM SKILL V VÀ F CỰC NHANH TẠI SEAL
-	-- ==========================================
 	print("Đã tới Seal! Bắt đầu spam V và F cực nhanh...")
 	
 	local tool = player.Character:FindFirstChild("The World")
@@ -212,35 +206,32 @@ local function processSeal(sealNum, myHrp)
 		local spamActive = true
 		local startTime = tick()
 		
-		-- Tọa độ bắn của V và F (dùng chung tọa độ Seal, bạn có thể đổi riêng nếu cần)
 		local vCoord = vector.create(-11220.2177734375, 429.3916015625, 1309.734130859375)
-		local fCoord = vector.create(-11220.2177734375, 429.3916015625, 1309.734130859375) -- Đổi tọa độ nếu F khác V
+		local fCoord = vector.create(-11220.2177734375, 429.3916015625, 1309.734130859375)
 		
-		-- Luồng 1: Spam V (tốc độ 0.05s - cực nhanh)
+		-- TỐI ƯU: Giảm wait từ 0.05 xuống 0.01 (100 lần/giây)
+		-- Luồng 1: Spam V
 		task.spawn(function()
 			while spamActive and tick() - startTime < 15 do
 				local args = { "Tool", tool, "V", vCoord }
 				pcall(function() remote:FireServer(unpack(args)) end)
-				task.wait(0.05) -- 20 lần/giây
+				task.wait(0.01) 
 			end
 		end)
 		
-		-- Luồng 2: Spam F (tốc độ 0.05s - cực nhanh)
+		-- Luồng 2: Spam F
 		task.spawn(function()
 			while spamActive and tick() - startTime < 15 do
 				local args = { "Tool", tool, "F", fCoord }
 				pcall(function() remote:FireServer(unpack(args)) end)
-				task.wait(0.05) -- 20 lần/giây
+				task.wait(0.01)
 			end
 		end)
 		
-		-- Đợi 3 giây cho V và F spam, sau đó chuyển sang inject E
+		-- Đợi 3 giây cho V và F spam
 		task.wait(3)
 		spamActive = false
 		
-		-- ==========================================
-		-- FIRE PROXIMITYPROMPT SPAWN BOSS
-		-- ==========================================
 		print("Fire ProximityPrompt spawn boss...")
 		local injectTime = tick()
 		while tick() - injectTime < 10 do
@@ -249,7 +240,8 @@ local function processSeal(sealNum, myHrp)
 					pcall(function() fireproximityprompt(v) end)
 				end
 			end
-			task.wait(0.2)
+			-- TỐI ƯU: Giảm wait từ 0.2 xuống 0.1
+			task.wait(0.1) 
 			if getTarget() then
 				print("Boss đã spawn!")
 				break
@@ -262,7 +254,7 @@ end
 -- ==========================================
 -- PHẦN 5: VÒNG LẶP CHÍNH
 -- ==========================================
-print("Đã cài đặt xong! Auto Farm (Không gom quái)...")
+print("Đã cài đặt xong! Auto Farm (Tốc độ cao)...")
 
 while task.wait(0.5) do
 	local char = player.Character
