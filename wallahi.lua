@@ -2,6 +2,7 @@ local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
 local TweenService = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -9,13 +10,14 @@ local remote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Input")
 
 local targetSealNum = nil
 local isBusy = false
+local hasEnemies = false -- Biến toàn cục theo dõi trạng thái quái
 
 -- ==========================================
 -- PHẦN 1: BẮT TIN NHẮN CHAT (CHRONO SEAL)
 -- ==========================================
 local function checkText(text)
 	if not text or text == "" then return false end
-	local cleanText = text:gsub("<.->", "") -- Xóa thẻ HTML
+	local cleanText = text:gsub("<.->", "")
 	local lowerText = cleanText:lower()
 	local sealNum = string.match(lowerText, "seal%s*(%d+)")
 	if sealNum then return tonumber(sealNum) end
@@ -23,15 +25,8 @@ local function checkText(text)
 end
 
 local function onMessageFound(sealNum)
-	print("========================================")
-	print(">>> ĐÃ BẮT ĐƯỢC TÍN HIỆU CHRONO SEAL:", sealNum)
+	print(">>> ĐÃ BẮT ĐƯỢC CHRONO SEAL:", sealNum)
 	targetSealNum = sealNum
-	if isBusy then
-		print("Đang bận đánh quái, sẽ tới Seal này sau!")
-	else
-		print("Sẽ tới Seal này ngay bây giờ!")
-	end
-	print("========================================")
 end
 
 local function hookLabel(label)
@@ -60,34 +55,54 @@ pcall(function() scanUI(CoreGui) end)
 scanUI(playerGui)
 
 -- ==========================================
--- PHẦN 2: HÀM TWEEN AN TOÀN (SAFE TWEEN)
+-- PHẦN 2: LUỒNG CHẠY NGẦM CHECK QUÁI (TASK.SPAWN)
 -- ==========================================
--- speed: Tốc độ di chuyển (studs/giây). 300 là nhanh, 50 là chậm.
--- useDashBypass: Có dùng Dash để lách anti-cheat không.
+task.spawn(function()
+	while task.wait(0.5) do -- Quét mỗi 0.5 giây
+		local enemiesFolder = workspace:FindFirstChild("Enemies")
+		local found = false
+		
+		if enemiesFolder then
+			for _, enemy in ipairs(enemiesFolder:GetChildren()) do
+				if enemy:IsA("Model") and enemy:FindFirstChild("Humanoid") and enemy:FindFirstChild("HumanoidRootPart") then
+					if enemy.Humanoid.Health > 0 then
+						found = true
+						break -- Chỉ cần tìm thấy 1 con là đủ
+					end
+				end
+			end
+		end
+		
+		-- Cập nhật trạng thái
+		if hasEnemies ~= found then
+			hasEnemies = found
+			if hasEnemies then
+				print("[DEBUG] Phát hiện quái trong workspace.Enemies!")
+			else
+				print("[DEBUG] Đã dọn sạch quái trong workspace.Enemies!")
+			end
+		end
+	end
+end)
+
+-- ==========================================
+-- PHẦN 3: HÀM TWEEN AN TOÀN
+-- ==========================================
 local function safeTween(hrp, targetCFrame, speed, useDashBypass)
 	local maxAttempts = 5
 	local attempt = 0
-	
 	while attempt < maxAttempts do
 		attempt = attempt + 1
 		local startPos = hrp.Position
 		local targetPos = targetCFrame.Position
 		local distance = (startPos - targetPos).Magnitude
+		if distance < 5 then break end
 		
-		if distance < 5 then
-			print("[DEBUG] Đã tới đích thành công!")
-			break -- Đã tới nơi
-		end
-		
-		-- Tính thời gian dựa trên tốc độ
 		local duration = distance / speed
-		print(string.format("[DEBUG] Tween lần %d: Khoảng cách %.1f studs, Tốc độ %d, Thời gian %.2fs", attempt, distance, speed, duration))
-		
 		local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear)
 		local tween = TweenService:Create(hrp, tweenInfo, {CFrame = targetCFrame})
 		tween:Play()
 		
-		-- Dash Bypass: Gửi lệnh Dash liên tục trong lúc Tween
 		if useDashBypass then
 			task.spawn(function()
 				local dashStart = tick()
@@ -101,25 +116,67 @@ local function safeTween(hrp, targetCFrame, speed, useDashBypass)
 		end
 		
 		tween.Completed:Wait()
-		task.wait(0.2) -- Đợi server cập nhật vị trí
+		task.wait(0.2)
 		
-		-- Kiểm tra xem có bị kéo về không
 		if hrp and hrp.Parent then
 			local currentDistance = (hrp.Position - targetPos).Magnitude
 			if currentDistance > 15 then
-				warn(string.format("[DEBUG] Bị kéo về! Còn cách đích %.1f studs. Đang thử lại...", currentDistance))
+				warn(string.format("[DEBUG] Bị kéo về! Còn %.1f studs. Thử lại...", currentDistance))
 			else
-				print("[DEBUG] Tween thành công, đã đứng gần đích!")
 				break
 			end
 		else
-			break -- Nhân vật chết
+			break
 		end
 	end
 end
 
 -- ==========================================
--- PHẦN 3: CÁC HÀM HỖ TRỢ (ENEMY & SEAL)
+-- PHẦN 4: HÀM GOM QUÁI (MOB GATHERING)
+-- ==========================================
+local function gatherEnemies(myHrp, gatherOffset)
+	local enemiesFolder = workspace:FindFirstChild("Enemies")
+	if not enemiesFolder then return 0 end
+	
+	local gatherPos = myHrp.CFrame * (gatherOffset or CFrame.new(0, 0, -10))
+	local count = 0
+	
+	for _, enemy in ipairs(enemiesFolder:GetChildren()) do
+		if enemy:IsA("Model") and enemy:FindFirstChild("HumanoidRootPart") and enemy:FindFirstChild("Humanoid") then
+			if enemy.Humanoid.Health > 0 then
+				local enemyHrp = enemy:FindFirstChild("HumanoidRootPart")
+				pcall(function() enemyHrp:SetNetworkOwner(player) end)
+				enemyHrp.CFrame = gatherPos
+				enemyHrp.AssemblyLinearVelocity = Vector3.zero
+				enemyHrp.AssemblyAngularVelocity = Vector3.zero
+				count = count + 1
+			end
+		end
+	end
+	return count
+end
+
+local function lockEnemiesPosition(myHrp, gatherPos)
+	local enemiesFolder = workspace:FindFirstChild("Enemies")
+	if not enemiesFolder then return end
+	
+	for _, enemy in ipairs(enemiesFolder:GetChildren()) do
+		if enemy:IsA("Model") and enemy:FindFirstChild("HumanoidRootPart") and enemy:FindFirstChild("Humanoid") then
+			if enemy.Humanoid.Health > 0 then
+				local enemyHrp = enemy:FindFirstChild("HumanoidRootPart")
+				pcall(function() enemyHrp:SetNetworkOwner(player) end)
+				local dist = (enemyHrp.Position - gatherPos.Position).Magnitude
+				if dist > 5 then
+					enemyHrp.CFrame = gatherPos
+				end
+				enemyHrp.AssemblyLinearVelocity = Vector3.zero
+			end
+		end
+	end
+end
+
+-- ==========================================
+-- PHẦN 5: CÁC HÀM HỖ TRỢ
 -- ==========================================
 local function getTarget()
 	local enemiesFolder = workspace:FindFirstChild("Enemies")
@@ -144,18 +201,19 @@ local function findChronoSealFolder(parent)
 end
 
 local function fightEnemy(target, myHrp)
-	print("Mục tiêu hiện tại: " .. target.Name)
+	print("Đánh: " .. target.Name)
 	local enemyHrp = target:FindFirstChild("HumanoidRootPart")
 	
-	-- TWEEN TỚI QUÁI: Tốc độ 300 (Nhanh), có Dash Bypass
 	local targetCFrame = enemyHrp.CFrame * CFrame.new(0, 0, 5)
 	safeTween(myHrp, targetCFrame, 300, true)
 	
+	local gatherPos = myHrp.CFrame * CFrame.new(0, 0, -5)
+	
 	while target and target.Parent and target:FindFirstChild("Humanoid") and target.Humanoid.Health > 0 do
+		lockEnemiesPosition(myHrp, gatherPos) -- Liên tục kéo quái về
+		
 		local currentEnemyHrp = target:FindFirstChild("HumanoidRootPart")
 		if currentEnemyHrp then
-			myHrp.CFrame = currentEnemyHrp.CFrame * CFrame.new(0, 0, 5)
-			
 			pcall(function() remote:FireServer("Dash", currentEnemyHrp.CFrame) end)
 			
 			local worldTool = player.Character:FindFirstChild("The World")
@@ -167,22 +225,16 @@ local function fightEnemy(target, myHrp)
 		end
 		task.wait(0.15)
 	end
-	print("Đã hạ gục " .. target.Name)
+	print("Đã hạ " .. target.Name)
 end
 
 local function processSeal(sealNum, myHrp)
-	print("Đang tìm kiếm Chrono Seal", sealNum, "...")
+	print("Đang tìm Chrono Seal", sealNum, "...")
 	local chronoSealFolder = findChronoSealFolder(workspace)
-	
-	if not chronoSealFolder then
-		warn("Không tìm thấy folder 'Chrono Seal'!")
-		targetSealNum = nil
-		return
-	end
+	if not chronoSealFolder then targetSealNum = nil return end
 	
 	local sealObj = chronoSealFolder:FindFirstChild(tostring(sealNum))
 	if not sealObj then
-		print("Chưa thấy Seal", sealNum, "đang đợi...")
 		local timeout = tick() + 5
 		while tick() < timeout do
 			sealObj = chronoSealFolder:FindFirstChild(tostring(sealNum))
@@ -190,23 +242,14 @@ local function processSeal(sealNum, myHrp)
 			task.wait(0.1)
 		end
 	end
-	
-	if not sealObj then
-		warn("Không tìm thấy Seal " .. sealNum .. "!")
-		targetSealNum = nil
-		return
-	end
+	if not sealObj then targetSealNum = nil return end
 	
 	local sealPos = sealObj:IsA("BasePart") and sealObj.Position or sealObj:GetPivot().Position
 	local targetCFrame = CFrame.new(sealPos) * CFrame.new(0, 5, 0)
-	
-	-- TWEEN TỚI SEAL: Tốc độ 50 (Chậm như đi bộ), có Dash Bypass
-	print("[DEBUG] Bắt đầu Tween chậm tới Seal", sealNum)
 	safeTween(myHrp, targetCFrame, 50, true)
 	
-	print("Bắt đầu spam Skill V...")
+	print("Spam Skill V...")
 	local tool = player.Character:FindFirstChild("The World")
-	
 	if tool then
 		local spamV = true
 		local startTime = tick()
@@ -221,7 +264,7 @@ local function processSeal(sealNum, myHrp)
 		task.wait(2)
 		spamV = false
 		
-		print("Đang fire ProximityPrompt để spawn boss...")
+		print("Fire ProximityPrompt spawn boss...")
 		local injectTime = tick()
 		while tick() - injectTime < 10 do
 			for _, v in ipairs(workspace:GetDescendants()) do
@@ -231,7 +274,7 @@ local function processSeal(sealNum, myHrp)
 			end
 			task.wait(0.2)
 			if getTarget() then
-				print("Boss đã spawn! Quay lại đánh boss.")
+				print("Boss đã spawn!")
 				break
 			end
 		end
@@ -240,9 +283,9 @@ local function processSeal(sealNum, myHrp)
 end
 
 -- ==========================================
--- PHẦN 4: VÒNG LẶP CHÍNH (MAIN LOOP)
+-- PHẦN 6: VÒNG LẶP CHÍNH
 -- ==========================================
-print("Đã cài đặt xong! Bắt đầu Auto Farm...")
+print("Đã cài đặt xong! Auto Farm + Mob Gathering...")
 
 while task.wait(0.5) do
 	local char = player.Character
@@ -255,12 +298,24 @@ while task.wait(0.5) do
 		continue
 	end
 
-	local enemy = getTarget()
-	if enemy then
-		isBusy = true
-		fightEnemy(enemy, myHrp)
-		isBusy = false
+	-- Dựa vào biến hasEnemies được cập nhật từ task.spawn
+	if hasEnemies then
+		local enemy = getTarget()
+		if enemy then
+			isBusy = true
+			
+			-- Gom quái trước khi đánh
+			local gathered = gatherEnemies(myHrp, CFrame.new(0, 0, -10))
+			if gathered > 0 then
+				print(string.format("[GATHER] Đã gom %d con quái!", gathered))
+				task.wait(0.3)
+			end
+			
+			fightEnemy(enemy, myHrp)
+			isBusy = false
+		end
 	else
+		-- Không có quái
 		if targetSealNum then
 			isBusy = true
 			processSeal(targetSealNum, myHrp)
