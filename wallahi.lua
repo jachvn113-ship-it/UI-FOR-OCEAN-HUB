@@ -127,7 +127,42 @@ local function safeTween(hrp, targetCFrame, speed, useDashBypass)
 end
 
 -- ==========================================
--- PHẦN 4: CÁC HÀM HỖ TRỢ
+-- PHẦN 4: HÀM SPAM PROXIMITYPROMPT THÔNG MINH
+-- ==========================================
+-- Chỉ fire prompt khi thực sự tìm thấy prompt đang Enabled
+-- Không spam mù quáng gây rate limit
+local function spamProximityPrompt(duration)
+	local startTime = tick()
+	local fireCount = 0
+	
+	while tick() - startTime < duration do
+		local found = false
+		
+		-- Quét toàn bộ workspace để tìm ProximityPrompt
+		for _, v in ipairs(workspace:GetDescendants()) do
+			if v:IsA("ProximityPrompt") and v.Enabled then
+				pcall(function()
+					fireproximityprompt(v)
+					fireCount = fireCount + 1
+				end)
+				found = true
+				break -- Chỉ fire 1 prompt mỗi vòng lặp để tránh dư thừa
+			end
+		end
+		
+		-- Nếu tìm thấy prompt -> quét liên tục không nghỉ
+		-- Nếu không tìm thấy -> nghỉ 0.05s rồi quét lại
+		if not found then
+			task.wait(0.05)
+		end
+	end
+	
+	print(string.format("[DEBUG] Đã fire ProximityPrompt %d lần trong %.1f giây", fireCount, duration))
+	return fireCount
+end
+
+-- ==========================================
+-- PHẦN 5: CÁC HÀM HỖ TRỢ
 -- ==========================================
 local function getTarget()
 	local enemiesFolder = workspace:FindFirstChild("Enemies")
@@ -172,8 +207,7 @@ local function fightEnemy(target, myHrp)
 				pcall(function() remote:FireServer("Tool", worldTool, "C", currentEnemyHrp.Position) end)
 			end
 		end
-		-- TỐI ƯU: Giảm từ 0.15 xuống 0.05 để spam nhanh hơn
-		task.wait(0.05) 
+		task.wait(0.05)
 	end
 	print("Đã hạ " .. target.Name)
 end
@@ -209,17 +243,16 @@ local function processSeal(sealNum, myHrp)
 		local vCoord = vector.create(-11220.2177734375, 429.3916015625, 1309.734130859375)
 		local fCoord = vector.create(-11220.2177734375, 429.3916015625, 1309.734130859375)
 		
-		-- TỐI ƯU: Giảm wait từ 0.05 xuống 0.01 (100 lần/giây)
-		-- Luồng 1: Spam V
+		-- Luồng 1: Spam V (tốc độ 0.01s)
 		task.spawn(function()
 			while spamActive and tick() - startTime < 15 do
 				local args = { "Tool", tool, "V", vCoord }
 				pcall(function() remote:FireServer(unpack(args)) end)
-				task.wait(0.01) 
+				task.wait(0.01)
 			end
 		end)
 		
-		-- Luồng 2: Spam F
+		-- Luồng 2: Spam F (tốc độ 0.01s)
 		task.spawn(function()
 			while spamActive and tick() - startTime < 15 do
 				local args = { "Tool", tool, "F", fCoord }
@@ -232,29 +265,26 @@ local function processSeal(sealNum, myHrp)
 		task.wait(3)
 		spamActive = false
 		
-		print("Fire ProximityPrompt spawn boss...")
-		local injectTime = tick()
-		while tick() - injectTime < 10 do
-			for _, v in ipairs(workspace:GetDescendants()) do
-				if v:IsA("ProximityPrompt") and v.Enabled then
-					pcall(function() fireproximityprompt(v) end)
-				end
-			end
-			-- TỐI ƯU: Giảm wait từ 0.2 xuống 0.1
-			task.wait(0.1) 
-			if getTarget() then
-				print("Boss đã spawn!")
-				break
-			end
+		-- ==========================================
+		-- SPAM PROXIMITYPROMPT BẰNG HÀM THÔNG MINH
+		-- ==========================================
+		print("Bắt đầu spam ProximityPrompt (hàm thông minh)...")
+		spamProximityPrompt(10) -- Spam trong 10 giây
+		
+		-- Kiểm tra boss đã spawn chưa
+		if getTarget() then
+			print("Boss đã spawn! Quay lại đánh boss.")
+		else
+			warn("Hết 10 giây mà boss chưa spawn! Có thể F chưa kích hoạt Stopped Time hoặc prompt bị khóa.")
 		end
 	end
 	targetSealNum = nil
 end
 
 -- ==========================================
--- PHẦN 5: VÒNG LẶP CHÍNH
+-- PHẦN 6: VÒNG LẶP CHÍNH
 -- ==========================================
-print("Đã cài đặt xong! Auto Farm (Tốc độ cao)...")
+print("Đã cài đặt xong! Auto Farm (Tốc độ cao + Spam Prompt thông minh)...")
 
 while task.wait(0.5) do
 	local char = player.Character
