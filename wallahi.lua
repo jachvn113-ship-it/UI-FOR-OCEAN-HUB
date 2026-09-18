@@ -13,6 +13,12 @@ local isBusy = false
 local hasEnemies = false
 
 -- ==========================================
+-- CẤU HÌNH
+-- ==========================================
+local SEAL_TIMEOUT = 30 -- Nếu ở Seal quá 30s mà chưa có boss -> retry
+local MAX_RETRY = 5     -- Số lần retry tối đa (tránh treo vô hạn)
+
+-- ==========================================
 -- PHẦN 1: BẮT TIN NHẮN CHAT (CHRONO SEAL)
 -- ==========================================
 local function checkText(text)
@@ -129,8 +135,7 @@ end
 -- ==========================================
 -- PHẦN 4: HÀM SPAM PROXIMITYPROMPT THÔNG MINH
 -- ==========================================
--- Chỉ fire prompt khi thực sự tìm thấy prompt đang Enabled
--- Không spam mù quáng gây rate limit
+-- Trả về true nếu tìm thấy ít nhất 1 prompt enabled trong lúc spam
 local function spamProximityPrompt(duration)
 	local startTime = tick()
 	local fireCount = 0
@@ -138,7 +143,6 @@ local function spamProximityPrompt(duration)
 	while tick() - startTime < duration do
 		local found = false
 		
-		-- Quét toàn bộ workspace để tìm ProximityPrompt
 		for _, v in ipairs(workspace:GetDescendants()) do
 			if v:IsA("ProximityPrompt") and v.Enabled then
 				pcall(function()
@@ -146,12 +150,10 @@ local function spamProximityPrompt(duration)
 					fireCount = fireCount + 1
 				end)
 				found = true
-				break -- Chỉ fire 1 prompt mỗi vòng lặp để tránh dư thừa
+				break
 			end
 		end
 		
-		-- Nếu tìm thấy prompt -> quét liên tục không nghỉ
-		-- Nếu không tìm thấy -> nghỉ 0.05s rồi quét lại
 		if not found then
 			task.wait(0.05)
 		end
@@ -212,6 +214,9 @@ local function fightEnemy(target, myHrp)
 	print("Đã hạ " .. target.Name)
 end
 
+-- ==========================================
+-- HÀM CHÍNH XỬ LÝ SEAL (CÓ TIMEOUT 30s)
+-- ==========================================
 local function processSeal(sealNum, myHrp)
 	print("Đang tìm Chrono Seal", sealNum, "...")
 	local chronoSealFolder = findChronoSealFolder(workspace)
@@ -230,61 +235,101 @@ local function processSeal(sealNum, myHrp)
 	
 	local sealPos = sealObj:IsA("BasePart") and sealObj.Position or sealObj:GetPivot().Position
 	local targetCFrame = CFrame.new(sealPos) * CFrame.new(0, 5, 0)
-	safeTween(myHrp, targetCFrame, 50, true)
-	
-	print("Đã tới Seal! Bắt đầu spam V và F cực nhanh...")
+	safeTween(myHrp, targetCFrame, 50, true) -- Tween chậm tới Seal
 	
 	local tool = player.Character:FindFirstChild("The World")
+	if not tool then
+		warn("Không tìm thấy Tool 'The World'!")
+		targetSealNum = nil
+		return
+	end
 	
-	if tool then
-		local spamActive = true
-		local startTime = tick()
+	-- ==========================================
+	-- VÒNG LẶP RETRY: NẾU 30S KO CÓ BOSS -> SPAM V LẠI
+	-- ==========================================
+	local retryCount = 0
+	local bossSpawned = false
+	
+	while retryCount < MAX_RETRY and not bossSpawned do
+		retryCount = retryCount + 1
+		print(string.format("=== [SEAL %d] Lần thử %d/%d ===", sealNum, retryCount, MAX_RETRY))
 		
-		local vCoord = vector.create(-11220.2177734375, 429.3916015625, 1309.734130859375)
-		local fCoord = vector.create(-11220.2177734375, 429.3916015625, 1309.734130859375)
+		-- ==========================================
+		-- BƯỚC 1: SPAM V (TIME STOP) CỰC NHANH
+		-- ==========================================
+		print("Spam V (Time Stop) cực nhanh...")
+		local vCoord = vector.create(sealPos.X, sealPos.Y, sealPos.Z)
+		local vSpamEnd = tick() + 3
+		local vCount = 0
 		
-		-- Luồng 1: Spam V (tốc độ 0.01s)
+		while tick() < vSpamEnd do
+			local vArgs = { "Tool", tool, "V", vCoord }
+			pcall(function() 
+				remote:FireServer(unpack(vArgs))
+				vCount = vCount + 1
+			end)
+			task.wait(0.01)
+		end
+		print(string.format("[DEBUG] Đã spam V %d lần", vCount))
+		
+		-- ==========================================
+		-- BƯỚC 2: SPAM PROMPT VÀ CHỜ BOSS SPAWN (TỐI ĐA 30S)
+		-- ==========================================
+		print("Bắt đầu spam ProximityPrompt và chờ boss (tối đa 30s)...")
+		local waitStart = tick()
+		local promptSpamActive = true
+		
+		-- Luồng spam prompt chạy ngầm
 		task.spawn(function()
-			while spamActive and tick() - startTime < 15 do
-				local args = { "Tool", tool, "V", vCoord }
-				pcall(function() remote:FireServer(unpack(args)) end)
-				task.wait(0.01)
+			while promptSpamActive do
+				for _, v in ipairs(workspace:GetDescendants()) do
+					if v:IsA("ProximityPrompt") and v.Enabled then
+						pcall(function() fireproximityprompt(v) end)
+						break
+					end
+				end
+				task.wait(0.05)
 			end
 		end)
 		
-		-- Luồng 2: Spam F (tốc độ 0.01s)
-		task.spawn(function()
-			while spamActive and tick() - startTime < 15 do
-				local args = { "Tool", tool, "F", fCoord }
-				pcall(function() remote:FireServer(unpack(args)) end)
-				task.wait(0.01)
+		-- Vòng lặp kiểm tra boss spawn
+		while tick() - waitStart < SEAL_TIMEOUT do
+			-- Nếu có quái xuất hiện -> boss đã spawn
+			if getTarget() then
+				bossSpawned = true
+				break
 			end
-		end)
+			
+			-- Nếu seal biến mất (đã bị phá) -> cũng coi như xong
+			if not sealObj or not sealObj.Parent then
+				print("[DEBUG] Seal đã biến mất, coi như thành công!")
+				bossSpawned = true
+				break
+			end
+			
+			task.wait(0.5)
+		end
 		
-		-- Đợi 3 giây cho V và F spam
-		task.wait(3)
-		spamActive = false
+		promptSpamActive = false -- Dừng spam prompt
 		
-		-- ==========================================
-		-- SPAM PROXIMITYPROMPT BẰNG HÀM THÔNG MINH
-		-- ==========================================
-		print("Bắt đầu spam ProximityPrompt (hàm thông minh)...")
-		spamProximityPrompt(10) -- Spam trong 10 giây
-		
-		-- Kiểm tra boss đã spawn chưa
-		if getTarget() then
-			print("Boss đã spawn! Quay lại đánh boss.")
+		if bossSpawned then
+			print(string.format(">>> [SEAL %d] Boss đã spawn sau %d lần thử!", sealNum, retryCount))
 		else
-			warn("Hết 10 giây mà boss chưa spawn! Có thể F chưa kích hoạt Stopped Time hoặc prompt bị khóa.")
+			warn(string.format("[SEAL %d] Hết %ds mà boss chưa spawn! Retry lại...", sealNum, SEAL_TIMEOUT))
 		end
 	end
+	
+	if not bossSpawned then
+		warn(string.format("[SEAL %d] Đã thử %d lần nhưng boss vẫn không spawn. Bỏ qua Seal này!", sealNum, MAX_RETRY))
+	end
+	
 	targetSealNum = nil
 end
 
 -- ==========================================
 -- PHẦN 6: VÒNG LẶP CHÍNH
 -- ==========================================
-print("Đã cài đặt xong! Auto Farm (Tốc độ cao + Spam Prompt thông minh)...")
+print("Đã cài đặt xong! Auto Farm (V = Time Stop, có Timeout 30s)")
 
 while task.wait(0.5) do
 	local char = player.Character
