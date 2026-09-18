@@ -7,17 +7,23 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 local remote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Input")
 
--- Biến toàn cục
 local targetSealNum = nil
 local isBusy = false
 
 -- ==========================================
 -- PHẦN 1: BẮT TIN NHẮN CHAT (CHRONO SEAL)
 -- ==========================================
+
+-- Hàm làm sạch Rich Text và lấy số Seal
 local function checkText(text)
 	if not text or text == "" then return false end
-	local lowerText = text:lower()
-	local sealNum = string.match(lowerText, "seal%s+(%d+)")
+	
+	-- Xóa tất cả các thẻ HTML (ví dụ: <font color='...'>)
+	local cleanText = text:gsub("<.->", "")
+	local lowerText = cleanText:lower()
+	
+	-- Tìm số seal (hỗ trợ cả "seal 3", "seal3", "seal  3")
+	local sealNum = string.match(lowerText, "seal%s*(%d+)")
 	if sealNum then
 		return tonumber(sealNum)
 	end
@@ -25,12 +31,16 @@ local function checkText(text)
 end
 
 local function onMessageFound(sealNum)
-	if isBusy then return end
 	print("========================================")
 	print(">>> ĐÃ BẮT ĐƯỢC TÍN HIỆU CHRONO SEAL:", sealNum)
-	print("Sẽ ưu tiên dọn quái trước, sau đó tới Seal này!")
+	targetSealNum = sealNum -- Luôn cập nhật số Seal mới nhất
+	
+	if isBusy then
+		print("Đang bận đánh quái, sẽ tới Seal này sau khi dọn sạch quái!")
+	else
+		print("Sẽ tới Seal này ngay bây giờ!")
+	end
 	print("========================================")
-	targetSealNum = sealNum
 end
 
 local function hookLabel(label)
@@ -78,79 +88,84 @@ local function getTarget()
 	return nil
 end
 
+-- Tìm folder Chrono Seal tự động (thay vì hardcode đường dẫn)
+local function findChronoSealFolder(parent)
+	for _, child in ipairs(parent:GetChildren()) do
+		if child.Name == "Chrono Seal" then
+			return child
+		elseif child:IsA("Folder") or child:IsA("Model") or child:IsA("Workspace") then
+			local found = findChronoSealFolder(child)
+			if found then return found end
+		end
+	end
+	return nil
+end
+
 -- Logic đánh quái (Dash + Tween + Skill Z, X, C)
 local function fightEnemy(target, myHrp)
 	print("Mục tiêu hiện tại: " .. target.Name)
 	local enemyHrp = target:FindFirstChild("HumanoidRootPart")
 	
-	-- Tween tới Enemy
 	local targetCFrame = enemyHrp.CFrame * CFrame.new(0, 0, 5)
 	local tween = TweenService:Create(myHrp, TweenInfo.new(0.2, Enum.EasingStyle.Linear), {CFrame = targetCFrame})
 	tween:Play()
 	tween.Completed:Wait()
 	
-	-- Vòng lặp đánh
 	while target and target.Parent and target:FindFirstChild("Humanoid") and target.Humanoid.Health > 0 do
 		local currentEnemyHrp = target:FindFirstChild("HumanoidRootPart")
 		if currentEnemyHrp then
-			-- 1. Bám theo enemy
 			myHrp.CFrame = currentEnemyHrp.CFrame * CFrame.new(0, 0, 5)
 			
-			-- 2. Spam Dash
-			local dashArgs = { "Dash", currentEnemyHrp.CFrame }
-			pcall(function() remote:FireServer(unpack(dashArgs)) end)
+			-- Spam Dash
+			pcall(function() remote:FireServer("Dash", currentEnemyHrp.CFrame) end)
 			
-			-- 3. Spam các Skill (Z, X, C)
+			-- Spam các Skill (Z, X, C)
 			local worldTool = player.Character:FindFirstChild("The World")
 			if worldTool then
-				-- Skill Z
-				local zArgs = {
-					"Tool",
-					worldTool,
-					"Z",
-					currentEnemyHrp.Position -- Đổi thành vector.create(...) nếu bạn có tọa độ riêng
-				}
-				pcall(function() remote:FireServer(unpack(zArgs)) end)
-				
-				-- Skill X
-				local xArgs = {
-					"Tool",
-					worldTool,
-					"X",
-					currentEnemyHrp.Position -- Đổi thành vector.create(...) nếu bạn có tọa độ riêng
-				}
-				pcall(function() remote:FireServer(unpack(xArgs)) end)
-				
-				-- Skill C
-				local cArgs = {
-					"Tool",
-					worldTool,
-					"C",
-					currentEnemyHrp.Position -- Đổi thành vector.create(...) nếu bạn có tọa độ riêng
-				}
-				pcall(function() remote:FireServer(unpack(cArgs)) end)
+				pcall(function() remote:FireServer("Tool", worldTool, "Z", currentEnemyHrp.Position) end)
+				pcall(function() remote:FireServer("Tool", worldTool, "X", currentEnemyHrp.Position) end)
+				pcall(function() remote:FireServer("Tool", worldTool, "C", currentEnemyHrp.Position) end)
 			end
 		end
-		task.wait(0.15) -- Tốc độ spam (Dash + Z + X + C)
+		task.wait(0.15)
 	end
 	print("Đã hạ gục " .. target.Name .. ". Dừng spam skill.")
 end
 
--- Logic xử lý Seal (Tween, Spam V, Fire ProximityPrompt)
+-- Logic xử lý Seal
 local function processSeal(sealNum, myHrp)
-	print("Đang di chuyển tới Chrono Seal " .. sealNum)
+	print("Đang tìm kiếm Chrono Seal", sealNum, "...")
 	
-	local islandFolder = workspace:FindFirstChild("Islands")
-	local realmFolder = islandFolder and islandFolder:FindFirstChild("Realm Beyond Heaven")
-	local realmSubFolder = realmFolder and realmFolder:FindFirstChild("Realm Beyond Heaven")
-	local chronoSealFolder = realmSubFolder and realmSubFolder:FindFirstChild("Chrono Seal")
-	local sealObj = chronoSealFolder and chronoSealFolder:FindFirstChild(tostring(sealNum))
+	-- Tìm folder Chrono Seal ở bất kỳ đâu trong workspace
+	local chronoSealFolder = findChronoSealFolder(workspace)
 	
-	if not sealObj then
-		warn("Không tìm thấy Seal " .. sealNum .. " trong workspace!")
+	if not chronoSealFolder then
+		warn("Không tìm thấy folder 'Chrono Seal' ở bất kỳ đâu trong workspace!")
 		targetSealNum = nil
 		return
 	end
+	
+	print("Đã tìm thấy folder Chrono Seal tại:", chronoSealFolder:GetFullName())
+	
+	-- Đợi Seal xuất hiện (tối đa 5 giây)
+	local sealObj = chronoSealFolder:FindFirstChild(tostring(sealNum))
+	if not sealObj then
+		print("Chưa thấy Seal", sealNum, "đang đợi...")
+		local timeout = tick() + 5
+		while tick() < timeout do
+			sealObj = chronoSealFolder:FindFirstChild(tostring(sealNum))
+			if sealObj then break end
+			task.wait(0.1)
+		end
+	end
+	
+	if not sealObj then
+		warn("Không tìm thấy Seal " .. sealNum .. " trong folder Chrono Seal!")
+		targetSealNum = nil
+		return
+	end
+	
+	print("Đã tìm thấy Seal", sealNum, "tại:", sealObj:GetFullName())
 	
 	local sealPos = sealObj:IsA("BasePart") and sealObj.Position or sealObj:GetPivot().Position
 	local targetCFrame = CFrame.new(sealPos) * CFrame.new(0, 5, 0)
