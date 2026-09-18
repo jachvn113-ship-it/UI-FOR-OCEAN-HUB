@@ -10,7 +10,7 @@ local remote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Input")
 
 local targetSealNum = nil
 local isBusy = false
-local hasEnemies = false -- Biến toàn cục theo dõi trạng thái quái
+local hasEnemies = false
 
 -- ==========================================
 -- PHẦN 1: BẮT TIN NHẮN CHAT (CHRONO SEAL)
@@ -58,7 +58,7 @@ scanUI(playerGui)
 -- PHẦN 2: LUỒNG CHẠY NGẦM CHECK QUÁI (TASK.SPAWN)
 -- ==========================================
 task.spawn(function()
-	while task.wait(0.5) do -- Quét mỗi 0.5 giây
+	while task.wait(0.5) do
 		local enemiesFolder = workspace:FindFirstChild("Enemies")
 		local found = false
 		
@@ -73,7 +73,6 @@ task.spawn(function()
 			end
 		end
 		
-		-- Cập nhật trạng thái
 		if hasEnemies ~= found then
 			hasEnemies = found
 			if hasEnemies then
@@ -132,7 +131,7 @@ local function safeTween(hrp, targetCFrame, speed, useDashBypass)
 end
 
 -- ==========================================
--- PHẦN 4: CÁC HÀM HỖ TRỢ (ĐÃ BỎ GOM QUÁI)
+-- PHẦN 4: CÁC HÀM HỖ TRỢ
 -- ==========================================
 local function getTarget()
 	local enemiesFolder = workspace:FindFirstChild("Enemies")
@@ -160,18 +159,14 @@ local function fightEnemy(target, myHrp)
 	print("Đánh: " .. target.Name)
 	local enemyHrp = target:FindFirstChild("HumanoidRootPart")
 	
-	-- Tween tới con quái đầu tiên
 	local targetCFrame = enemyHrp.CFrame * CFrame.new(0, 0, 5)
 	safeTween(myHrp, targetCFrame, 300, true)
 	
-	-- Vòng lặp đánh
 	while target and target.Parent and target:FindFirstChild("Humanoid") and target.Humanoid.Health > 0 do
 		local currentEnemyHrp = target:FindFirstChild("HumanoidRootPart")
 		if currentEnemyHrp then
-			-- Bám theo quái (vì không gom nữa nên phải đuổi theo nó)
 			myHrp.CFrame = currentEnemyHrp.CFrame * CFrame.new(0, 0, 5)
 			
-			-- Spam Dash và các skill
 			pcall(function() remote:FireServer("Dash", currentEnemyHrp.CFrame) end)
 			
 			local worldTool = player.Character:FindFirstChild("The World")
@@ -206,22 +201,46 @@ local function processSeal(sealNum, myHrp)
 	local targetCFrame = CFrame.new(sealPos) * CFrame.new(0, 5, 0)
 	safeTween(myHrp, targetCFrame, 50, true) -- Tween chậm tới Seal
 	
-	print("Spam Skill V...")
+	-- ==========================================
+	-- SPAM SKILL V VÀ F CỰC NHANH TẠI SEAL
+	-- ==========================================
+	print("Đã tới Seal! Bắt đầu spam V và F cực nhanh...")
+	
 	local tool = player.Character:FindFirstChild("The World")
+	
 	if tool then
-		local spamV = true
+		local spamActive = true
 		local startTime = tick()
+		
+		-- Tọa độ bắn của V và F (dùng chung tọa độ Seal, bạn có thể đổi riêng nếu cần)
+		local vCoord = vector.create(-11220.2177734375, 429.3916015625, 1309.734130859375)
+		local fCoord = vector.create(-11220.2177734375, 429.3916015625, 1309.734130859375) -- Đổi tọa độ nếu F khác V
+		
+		-- Luồng 1: Spam V (tốc độ 0.05s - cực nhanh)
 		task.spawn(function()
-			while spamV and tick() - startTime < 15 do
-				local args = { "Tool", tool, "V", vector.create(-11220.2177734375, 429.3916015625, 1309.734130859375) }
+			while spamActive and tick() - startTime < 15 do
+				local args = { "Tool", tool, "V", vCoord }
 				pcall(function() remote:FireServer(unpack(args)) end)
-				task.wait(0.1)
+				task.wait(0.05) -- 20 lần/giây
 			end
 		end)
 		
-		task.wait(2)
-		spamV = false
+		-- Luồng 2: Spam F (tốc độ 0.05s - cực nhanh)
+		task.spawn(function()
+			while spamActive and tick() - startTime < 15 do
+				local args = { "Tool", tool, "F", fCoord }
+				pcall(function() remote:FireServer(unpack(args)) end)
+				task.wait(0.05) -- 20 lần/giây
+			end
+		end)
 		
+		-- Đợi 3 giây cho V và F spam, sau đó chuyển sang inject E
+		task.wait(3)
+		spamActive = false
+		
+		-- ==========================================
+		-- FIRE PROXIMITYPROMPT SPAWN BOSS
+		-- ==========================================
 		print("Fire ProximityPrompt spawn boss...")
 		local injectTime = tick()
 		while tick() - injectTime < 10 do
@@ -256,16 +275,14 @@ while task.wait(0.5) do
 		continue
 	end
 
-	-- Dựa vào biến hasEnemies được cập nhật từ task.spawn
 	if hasEnemies then
 		local enemy = getTarget()
 		if enemy then
 			isBusy = true
-			fightEnemy(enemy, myHrp) -- Bỏ hoàn toàn phần gom quái
+			fightEnemy(enemy, myHrp)
 			isBusy = false
 		end
 	else
-		-- Không có quái
 		if targetSealNum then
 			isBusy = true
 			processSeal(targetSealNum, myHrp)
