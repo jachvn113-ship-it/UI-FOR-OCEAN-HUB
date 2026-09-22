@@ -107,6 +107,43 @@ local function runAutoFarm()
 		end
 	end)
 
+	-- ==========================================
+	-- COOLDOWN LABEL (đọc trực tiếp để biết V hồi)
+	-- ==========================================
+	local cdLabel = nil
+	pcall(function()
+		local abilityDisplay = playerGui:WaitForChild("AbilityDisplay", 10)
+		if abilityDisplay then
+			local skillDisplay = abilityDisplay:WaitForChild("SkillDisplay", 10)
+			if skillDisplay then
+				local slot = skillDisplay:GetChildren()[10]
+				if slot then
+					local abilityFrame = slot:WaitForChild("AbilityFrame", 5)
+					if abilityFrame then
+						cdLabel = abilityFrame:WaitForChild("Cooldown", 5)
+					end
+				end
+			end
+		end
+	end)
+
+	if cdLabel then
+		print("[CD] Đã hook Cooldown label:", cdLabel:GetFullName())
+	else
+		warn("[CD] Không tìm thấy Cooldown label -> fallback spam V liên tục")
+	end
+
+	local function parseCooldown(text)
+		if not text or text == "" then return nil end
+		return tonumber(text:match("(%d+%.?%d*)"))
+	end
+
+	local function isVReady()
+		if not cdLabel or not cdLabel.Parent then return true end
+		local num = parseCooldown(cdLabel.Text)
+		return num == nil or num <= 0
+	end
+
 	local targetSealNum = nil
 	local isBusy = false
 	local hasEnemies = false
@@ -115,6 +152,7 @@ local function runAutoFarm()
 	local MAX_RETRY = 5
 	local PROMPT_SPAM_RATE = 0.005
 	local PROMPT_CACHE_REFRESH = 2
+	local SEAL_TWEEN_SPEED = 80
 
 	-- --- PHẦN 1: BẮT CHAT CHRONO SEAL ---
 	local function checkText(text)
@@ -302,7 +340,7 @@ local function runAutoFarm()
 
 		local sealPos = sealObj:IsA("BasePart") and sealObj.Position or sealObj:GetPivot().Position
 		local targetCFrame = CFrame.new(sealPos) * CFrame.new(0, 5, 0)
-		safeTween(myHrp, targetCFrame, 50, true)
+		safeTween(myHrp, targetCFrame, SEAL_TWEEN_SPEED, true)
 
 		local tool = player.Character:FindFirstChild("The World")
 		if not tool then
@@ -318,31 +356,33 @@ local function runAutoFarm()
 			retryCount = retryCount + 1
 			print(string.format("=== [SEAL %d] Lần thử %d/%d ===", sealNum, retryCount, MAX_RETRY))
 
-			print("Spam V (Time Stop) cực nhanh...")
 			local vCoord = vector.create(sealPos.X, sealPos.Y, sealPos.Z)
-			local vSpamEnd = tick() + 3
-			local vCount = 0
-			while tick() < vSpamEnd do
-				local vArgs = { "Tool", tool, "V", vCoord }
-				pcall(function()
-					remote:FireServer(unpack(vArgs))
-					vCount = vCount + 1
-				end)
-				task.wait(0.01)
-			end
-			print(string.format("[DEBUG] Đã spam V %d lần", vCount))
-
-			print(string.format("Bắt đầu spam ProximityPrompt (~%d lần/giây) và chờ boss (tối đa 30s)...", math.floor(1/PROMPT_SPAM_RATE)))
-			local waitStart = tick()
-			local promptSpamActive = true
+			local stopAll = false
+			local vFireCount = 0
 			local promptFireCount = 0
 
+			-- ==========================================
+			-- LUỒNG DUY NHẤT: Check CD -> spam V -> spam Prompt -> lặp
+			-- ==========================================
 			task.spawn(function()
 				refreshPrompts()
-				while promptSpamActive do
+				while not stopAll do
+					-- BƯỚC 1: Refresh cache prompt định kỳ
 					if tick() - lastPromptRefresh > PROMPT_CACHE_REFRESH then
 						refreshPrompts()
 					end
+
+					-- BƯỚC 2: Kiểm tra hồi chiêu V
+					if isVReady() then
+						-- V ready -> fire V trước
+						pcall(function()
+							remote:FireServer("Tool", tool, "V", vCoord)
+							vFireCount = vFireCount + 1
+						end)
+						task.wait(0.2) -- đợi label CD update tránh fire trùng
+					end
+
+					-- BƯỚC 3: Spam ProximityPrompt
 					for i = 1, #promptCache do
 						local v = promptCache[i]
 						if v and v.Parent and v.Enabled then
@@ -353,10 +393,15 @@ local function runAutoFarm()
 							break
 						end
 					end
+
 					task.wait(PROMPT_SPAM_RATE)
 				end
 			end)
 
+			-- ==========================================
+			-- CHỜ BOSS SPAWN
+			-- ==========================================
+			local waitStart = tick()
 			while tick() - waitStart < SEAL_TIMEOUT do
 				if getTarget() then
 					bossSpawned = true
@@ -370,13 +415,15 @@ local function runAutoFarm()
 				task.wait(0.5)
 			end
 
-			promptSpamActive = false
-			task.wait(0.1)
+			stopAll = true
+			task.wait(0.3)
 
 			if bossSpawned then
-				print(string.format(">>> [SEAL %d] Boss đã spawn sau %d lần thử! (Đã fire prompt %d lần)", sealNum, retryCount, promptFireCount))
+				print(string.format(">>> [SEAL %d] Boss spawn sau %d lần thử! (V: %d, Prompt: %d)",
+					sealNum, retryCount, vFireCount, promptFireCount))
 			else
-				warn(string.format("[SEAL %d] Hết %ds mà boss chưa spawn! Retry lại... (Đã fire prompt %d lần)", sealNum, SEAL_TIMEOUT, promptFireCount))
+				warn(string.format("[SEAL %d] Hết %ds chưa spawn! Retry... (V: %d, Prompt: %d)",
+					sealNum, SEAL_TIMEOUT, vFireCount, promptFireCount))
 			end
 		end
 
