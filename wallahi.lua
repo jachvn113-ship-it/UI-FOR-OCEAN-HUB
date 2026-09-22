@@ -44,14 +44,37 @@ local function runPreFarmSequence()
 	local events  = remotes:WaitForChild("Events")
 	local dungeonSync = events:WaitForChild("DungeonInsideSync")
 
-	local theWorld = char:WaitForChild("The World", 10)
+	-- Lấy tool từ Character hoặc Backpack
+	local theWorld = char:FindFirstChild("The World")
 	if not theWorld then
-		warn("[PRE-FARM] Không tìm thấy 'The World'!")
+		local backpack = player:FindFirstChild("Backpack")
+		if backpack then
+			theWorld = backpack:FindFirstChild("The World")
+		end
+	end
+	if not theWorld then
+		local deadline = tick() + 10
+		while tick() < deadline and not theWorld do
+			theWorld = char:FindFirstChild("The World")
+				or (player:FindFirstChild("Backpack") and player.Backpack:FindFirstChild("The World"))
+			if not theWorld then task.wait(0.1) end
+		end
+	end
+	if not theWorld then
+		warn("[PRE-FARM] Không tìm thấy 'The World' trong Character/Backpack!")
 		return
 	end
 
-	print("[PRE-FARM] Equip The World...")
-	inputEv:FireServer("Equip", theWorld)
+	-- Equip trực tiếp: set Parent = Character
+	print("[PRE-FARM] Equip The World (Backpack -> Character)...")
+	if theWorld.Parent ~= char then
+		local humanoid = char:FindFirstChildOfClass("Humanoid")
+		if humanoid then
+			humanoid:EquipTool(theWorld)
+		else
+			theWorld.Parent = char
+		end
+	end
 	task.wait(0.5)
 
 	print("[PRE-FARM] Vote Extreme...")
@@ -72,7 +95,8 @@ end
 -- ==========================================
 local function runAutoFarm()
 	local remote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Input")
-		-- Tự động ReplayVote mỗi 1 giây
+
+	-- Tự động ReplayVote mỗi 1 giây
 	task.spawn(function()
 		local dungeonSync = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Events"):WaitForChild("DungeonInsideSync")
 		while true do
