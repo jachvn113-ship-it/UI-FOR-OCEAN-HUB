@@ -44,7 +44,6 @@ local function runPreFarmSequence()
 	local events  = remotes:WaitForChild("Events")
 	local dungeonSync = events:WaitForChild("DungeonInsideSync")
 
-	-- Lấy tool từ Character hoặc Backpack
 	local theWorld = char:FindFirstChild("The World")
 	if not theWorld then
 		local backpack = player:FindFirstChild("Backpack")
@@ -65,7 +64,6 @@ local function runPreFarmSequence()
 		return
 	end
 
-	-- Equip trực tiếp: set Parent = Character
 	print("[PRE-FARM] Equip The World (Backpack -> Character)...")
 	if theWorld.Parent ~= char then
 		local humanoid = char:FindFirstChildOfClass("Humanoid")
@@ -96,7 +94,6 @@ end
 local function runAutoFarm()
 	local remote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Input")
 
-	-- Tự động ReplayVote mỗi 1 giây
 	task.spawn(function()
 		local dungeonSync = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Events"):WaitForChild("DungeonInsideSync")
 		while true do
@@ -107,9 +104,7 @@ local function runAutoFarm()
 		end
 	end)
 
-	-- ==========================================
-	-- COOLDOWN LABEL (đọc trực tiếp để biết V hồi)
-	-- ==========================================
+	-- COOLDOWN LABEL
 	local cdLabel = nil
 	pcall(function()
 		local abilityDisplay = playerGui:WaitForChild("AbilityDisplay", 10)
@@ -153,8 +148,9 @@ local function runAutoFarm()
 	local PROMPT_SPAM_RATE = 0.005
 	local PROMPT_CACHE_REFRESH = 2
 	local SEAL_TWEEN_SPEED = 80
+	local V_CAST_DELAY = 0.75
 
-	-- --- PHẦN 1: BẮT CHAT CHRONO SEAL ---
+	-- PHẦN 1: BẮT CHAT CHRONO SEAL
 	local function checkText(text)
 		if not text or text == "" then return false end
 		local cleanText = text:gsub("<.->", "")
@@ -194,7 +190,7 @@ local function runAutoFarm()
 	pcall(function() scanUI(CoreGui) end)
 	scanUI(playerGui)
 
-	-- --- PHẦN 2: CHECK QUÁI ---
+	-- PHẦN 2: CHECK QUÁI
 	task.spawn(function()
 		while task.wait(0.5) do
 			local enemiesFolder = workspace:FindFirstChild("Enemies")
@@ -216,7 +212,7 @@ local function runAutoFarm()
 		end
 	end)
 
-	-- --- PHẦN 3: TWEEN AN TOÀN ---
+	-- PHẦN 3: TWEEN AN TOÀN
 	local function safeTween(hrp, targetCFrame, speed, useDashBypass)
 		local maxAttempts = 5
 		local attempt = 0
@@ -260,7 +256,7 @@ local function runAutoFarm()
 		end
 	end
 
-	-- --- PHẦN 4: CACHE PROMPT ---
+	-- PHẦN 4: CACHE PROMPT
 	local promptCache = {}
 	local lastPromptRefresh = 0
 	local function refreshPrompts()
@@ -274,7 +270,7 @@ local function runAutoFarm()
 		lastPromptRefresh = tick()
 	end
 
-	-- --- PHẦN 5: HÀM HỖ TRỢ ---
+	-- PHẦN 5: HÀM HỖ TRỢ
 	local function getTarget()
 		local enemiesFolder = workspace:FindFirstChild("Enemies")
 		if not enemiesFolder then return nil end
@@ -321,7 +317,7 @@ local function runAutoFarm()
 		print("Đã hạ " .. target.Name)
 	end
 
-	-- --- PHẦN 6: XỬ LÝ SEAL ---
+	-- PHẦN 6: XỬ LÝ SEAL
 	local function processSeal(sealNum, myHrp)
 		print("Đang tìm Chrono Seal", sealNum, "...")
 		local chronoSealFolder = findChronoSealFolder(workspace)
@@ -361,28 +357,24 @@ local function runAutoFarm()
 			local vFireCount = 0
 			local promptFireCount = 0
 
-			-- ==========================================
-			-- LUỒNG DUY NHẤT: Check CD -> spam V -> spam Prompt -> lặp
-			-- ==========================================
+			-- LUỒNG DUY NHẤT
 			task.spawn(function()
 				refreshPrompts()
 				while not stopAll do
-					-- BƯỚC 1: Refresh cache prompt định kỳ
 					if tick() - lastPromptRefresh > PROMPT_CACHE_REFRESH then
 						refreshPrompts()
 					end
 
-					-- BƯỚC 2: Kiểm tra hồi chiêu V
+					-- BƯỚC 1: V ready -> fire V -> pause 0.75s
 					if isVReady() then
-						-- V ready -> fire V trước
 						pcall(function()
 							remote:FireServer("Tool", tool, "V", vCoord)
 							vFireCount = vFireCount + 1
 						end)
-						task.wait(0.2) -- đợi label CD update tránh fire trùng
+						task.wait(V_CAST_DELAY)
 					end
 
-					-- BƯỚC 3: Spam ProximityPrompt
+					-- BƯỚC 2: Spam prompt
 					for i = 1, #promptCache do
 						local v = promptCache[i]
 						if v and v.Parent and v.Enabled then
@@ -398,9 +390,7 @@ local function runAutoFarm()
 				end
 			end)
 
-			-- ==========================================
 			-- CHỜ BOSS SPAWN
-			-- ==========================================
 			local waitStart = tick()
 			while tick() - waitStart < SEAL_TIMEOUT do
 				if getTarget() then
@@ -433,7 +423,7 @@ local function runAutoFarm()
 		targetSealNum = nil
 	end
 
-	-- --- PHẦN 7: VÒNG LẶP CHÍNH ---
+	-- PHẦN 7: VÒNG LẶP CHÍNH
 	print("Đã cài đặt xong Auto Farm!")
 	while task.wait(0.5) do
 		local char = player.Character
@@ -465,9 +455,7 @@ local function runAutoFarm()
 	end
 end
 
--- ==========================================
 -- DISPATCHER
--- ==========================================
 if game.PlaceId == ENTRY_PLACE_ID then
 	print("[DISPATCH] Place entry -> chạy sequence vào Realm Beyond Heaven...")
 	runEntrySequence()
