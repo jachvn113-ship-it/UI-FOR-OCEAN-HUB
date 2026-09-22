@@ -141,7 +141,6 @@ local function runAutoFarm()
 
 	local targetSealNum = nil
 	local isBusy = false
-	local hasEnemies = false
 
 	local SEAL_TIMEOUT = 30
 	local MAX_RETRY = 5
@@ -149,9 +148,10 @@ local function runAutoFarm()
 	local PROMPT_CACHE_REFRESH = 2
 	local SEAL_TWEEN_SPEED = 80
 	local V_CAST_DELAY = 0.75
-	local V_REFIRE_GUARD = 2.0     -- chặn re-fire V trong 2s sau lần fire trước (tránh label chưa update)
+	local V_REFIRE_GUARD = 2.0
 	local MIN_SPAWN_DURATION = 8
 	local FIGHT_TIMEOUT = 25
+	local MAIN_TICK = 0.1        -- poll main loop mỗi 0.1s thay vì 0.5s
 
 	-- PHẦN 1: BẮT CHAT CHRONO SEAL
 	local function checkText(text)
@@ -192,28 +192,6 @@ local function runAutoFarm()
 	end
 	pcall(function() scanUI(CoreGui) end)
 	scanUI(playerGui)
-
-	-- PHẦN 2: CHECK QUÁI
-	task.spawn(function()
-		while task.wait(0.5) do
-			local enemiesFolder = workspace:FindFirstChild("Enemies")
-			local found = false
-			if enemiesFolder then
-				for _, enemy in ipairs(enemiesFolder:GetChildren()) do
-					if enemy:IsA("Model") and enemy:FindFirstChild("Humanoid") and enemy:FindFirstChild("HumanoidRootPart") then
-						if enemy.Humanoid.Health > 0 then
-							found = true
-							break
-						end
-					end
-				end
-			end
-			if hasEnemies ~= found then
-				hasEnemies = found
-				print(hasEnemies and "[DEBUG] Phát hiện quái!" or "[DEBUG] Đã dọn sạch quái!")
-			end
-		end
-	end)
 
 	-- PHẦN 3: TWEEN AN TOÀN
 	local function safeTween(hrp, targetCFrame, speed, useDashBypass)
@@ -378,7 +356,6 @@ local function runAutoFarm()
 					end
 
 					local now = tick()
-					-- FIX: chỉ fire V khi (1) label báo ready VÀ (2) đã qua V_REFIRE_GUARD kể từ lần fire trước
 					local vCanFire = isVReady() and (now - lastVFireTime >= V_REFIRE_GUARD)
 
 					if vCanFire then
@@ -387,9 +364,8 @@ local function runAutoFarm()
 							vFireCount = vFireCount + 1
 						end)
 						lastVFireTime = now
-						task.wait(V_CAST_DELAY) -- pause prompt 0.75s cho V apply
+						task.wait(V_CAST_DELAY)
 					else
-						-- Spam prompt liên tục (không bị block bởi V nữa)
 						for i = 1, #promptCache do
 							local v = promptCache[i]
 							if v and v.Parent and v.Enabled then
@@ -424,7 +400,7 @@ local function runAutoFarm()
 			end
 
 			stopAll = true
-			task.wait(0.3)
+			task.wait(0.1)  -- FIX: giảm 0.3 -> 0.1 để thoát nhanh hơn
 
 			if bossSpawned then
 				print(string.format(">>> [SEAL %d] Kết thúc spawn sau %d lần thử! (V: %d, Prompt: %d)",
@@ -441,32 +417,39 @@ local function runAutoFarm()
 		targetSealNum = nil
 	end
 
+	-- ==========================================
 	-- PHẦN 7: VÒNG LẶP CHÍNH
+	-- ==========================================
+	-- FIX: Gọi getTarget() trực tiếp mỗi tick (không dùng cache flag hasEnemies)
+	--      Priority: ENEMY TRƯỚC -> SEAL SAU (theo yêu cầu user)
 	print("Đã cài đặt xong Auto Farm!")
-	while task.wait(0.5) do
+	while task.wait(MAIN_TICK) do
 		local char = player.Character
 		if not char then char = player.CharacterAdded:Wait() end
 		local myHrp = char:FindFirstChild("HumanoidRootPart")
 		local myHumanoid = char:FindFirstChild("Humanoid")
 
 		if not myHrp or not myHumanoid or myHumanoid.Health <= 0 then
-			task.wait(1)
+			task.wait(0.5)
 			continue
 		end
 
-		if targetSealNum then
+		-- PRIORITY 1: Nếu có enemy trong folder Enemies -> đánh trước
+		local enemy = getTarget()
+		if enemy then
 			isBusy = true
-			processSeal(targetSealNum, myHrp)
+			fightEnemy(enemy, myHrp)
 			isBusy = false
-		elseif hasEnemies then
-			local enemy = getTarget()
-			if enemy then
-				isBusy = true
-				fightEnemy(enemy, myHrp)
-				isBusy = false
-			end
+			-- Sau khi hạ xong 1 con, loop lại ngay (tick 0.1s), check tiếp con khác
 		else
-			task.wait(1)
+			-- PRIORITY 2: Hết enemy -> mới xử lý seal
+			if targetSealNum then
+				isBusy = true
+				processSeal(targetSealNum, myHrp)
+				isBusy = false
+			else
+				task.wait(0.3)
+			end
 		end
 	end
 end
