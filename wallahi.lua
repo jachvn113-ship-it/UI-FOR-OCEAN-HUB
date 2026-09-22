@@ -149,8 +149,9 @@ local function runAutoFarm()
 	local PROMPT_CACHE_REFRESH = 2
 	local SEAL_TWEEN_SPEED = 80
 	local V_CAST_DELAY = 0.75
-	local MIN_SPAWN_DURATION = 8   -- spam V + prompt tối thiểu 8s dù có enemy (để spawn nhiều boss)
-	local FIGHT_TIMEOUT = 25       -- giới hạn mỗi trận đánh 25s (tránh loop vô hạn)
+	local V_REFIRE_GUARD = 2.0     -- chặn re-fire V trong 2s sau lần fire trước (tránh label chưa update)
+	local MIN_SPAWN_DURATION = 8
+	local FIGHT_TIMEOUT = 25
 
 	-- PHẦN 1: BẮT CHAT CHRONO SEAL
 	local function checkText(text)
@@ -304,7 +305,6 @@ local function runAutoFarm()
 
 		local fightStart = tick()
 		while target and target.Parent and target:FindFirstChild("Humanoid") and target.Humanoid.Health > 0 do
-			-- FIX: timeout tránh loop vô hạn khi không tiếp cận được
 			if tick() - fightStart > FIGHT_TIMEOUT then
 				warn("[FIGHT] Timeout target:", target.Name, "-> bỏ qua")
 				break
@@ -366,7 +366,8 @@ local function runAutoFarm()
 			local stopAll = false
 			local vFireCount = 0
 			local promptFireCount = 0
-			local spawnStart = tick()  -- FIX: mốc thời gian bắt đầu spawn
+			local spawnStart = tick()
+			local lastVFireTime = -999
 
 			-- LUỒNG DUY NHẤT
 			task.spawn(function()
@@ -376,40 +377,43 @@ local function runAutoFarm()
 						refreshPrompts()
 					end
 
-					if isVReady() then
+					local now = tick()
+					-- FIX: chỉ fire V khi (1) label báo ready VÀ (2) đã qua V_REFIRE_GUARD kể từ lần fire trước
+					local vCanFire = isVReady() and (now - lastVFireTime >= V_REFIRE_GUARD)
+
+					if vCanFire then
 						pcall(function()
 							remote:FireServer("Tool", tool, "V", vCoord)
 							vFireCount = vFireCount + 1
 						end)
-						task.wait(V_CAST_DELAY)
-					end
-
-					for i = 1, #promptCache do
-						local v = promptCache[i]
-						if v and v.Parent and v.Enabled then
-							pcall(function()
-								fireproximityprompt(v)
-								promptFireCount = promptFireCount + 1
-							end)
-							break
+						lastVFireTime = now
+						task.wait(V_CAST_DELAY) -- pause prompt 0.75s cho V apply
+					else
+						-- Spam prompt liên tục (không bị block bởi V nữa)
+						for i = 1, #promptCache do
+							local v = promptCache[i]
+							if v and v.Parent and v.Enabled then
+								pcall(function()
+									fireproximityprompt(v)
+									promptFireCount = promptFireCount + 1
+								end)
+								break
+							end
 						end
+						task.wait(PROMPT_SPAM_RATE)
 					end
-
-					task.wait(PROMPT_SPAM_RATE)
 				end
 			end)
 
-			-- CHỜ BOSS SPAWN (FIX: ưu tiên spam đủ MIN_SPAWN_DURATION trước khi thoát)
+			-- CHỜ BOSS SPAWN
 			local waitStart = tick()
 			while tick() - waitStart < SEAL_TIMEOUT do
-				-- Seal biến mất -> coi như xong
 				if not sealObj or not sealObj.Parent then
 					print("[DEBUG] Seal đã biến mất, coi như thành công!")
 					bossSpawned = true
 					break
 				end
 
-				-- Có enemy + đã spam đủ MIN_SPAWN_DURATION -> thoát sang fight
 				if getTarget() and (tick() - spawnStart) >= MIN_SPAWN_DURATION then
 					print(string.format("[DEBUG] Đã spawn đủ %.1fs, thoát sang fight!", MIN_SPAWN_DURATION))
 					bossSpawned = true
@@ -437,7 +441,7 @@ local function runAutoFarm()
 		targetSealNum = nil
 	end
 
-	-- PHẦN 7: VÒNG LẶP CHÍNH (FIX: ưu tiên spawn trước fight)
+	-- PHẦN 7: VÒNG LẶP CHÍNH
 	print("Đã cài đặt xong Auto Farm!")
 	while task.wait(0.5) do
 		local char = player.Character
@@ -451,7 +455,6 @@ local function runAutoFarm()
 		end
 
 		if targetSealNum then
-			-- FIX: ưu tiên processSeal trước, không bị hasEnemies chen ngang
 			isBusy = true
 			processSeal(targetSealNum, myHrp)
 			isBusy = false
