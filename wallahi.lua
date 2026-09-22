@@ -72,6 +72,16 @@ end
 -- ==========================================
 local function runAutoFarm()
 	local remote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Input")
+		-- Tự động ReplayVote mỗi 1 giây
+	task.spawn(function()
+		local dungeonSync = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Events"):WaitForChild("DungeonInsideSync")
+		while true do
+			pcall(function()
+				dungeonSync:FireServer("ReplayVote")
+			end)
+			task.wait(1)
+		end
+	end)
 
 	local targetSealNum = nil
 	local isBusy = false
