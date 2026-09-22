@@ -149,6 +149,8 @@ local function runAutoFarm()
 	local PROMPT_CACHE_REFRESH = 2
 	local SEAL_TWEEN_SPEED = 80
 	local V_CAST_DELAY = 0.75
+	local MIN_SPAWN_DURATION = 8   -- spam V + prompt tối thiểu 8s dù có enemy (để spawn nhiều boss)
+	local FIGHT_TIMEOUT = 25       -- giới hạn mỗi trận đánh 25s (tránh loop vô hạn)
 
 	-- PHẦN 1: BẮT CHAT CHRONO SEAL
 	local function checkText(text)
@@ -296,10 +298,18 @@ local function runAutoFarm()
 	local function fightEnemy(target, myHrp)
 		print("Đánh: " .. target.Name)
 		local enemyHrp = target:FindFirstChild("HumanoidRootPart")
+		if not enemyHrp then return end
 		local targetCFrame = enemyHrp.CFrame * CFrame.new(0, 0, 5)
 		safeTween(myHrp, targetCFrame, 300, true)
 
+		local fightStart = tick()
 		while target and target.Parent and target:FindFirstChild("Humanoid") and target.Humanoid.Health > 0 do
+			-- FIX: timeout tránh loop vô hạn khi không tiếp cận được
+			if tick() - fightStart > FIGHT_TIMEOUT then
+				warn("[FIGHT] Timeout target:", target.Name, "-> bỏ qua")
+				break
+			end
+
 			local currentEnemyHrp = target:FindFirstChild("HumanoidRootPart")
 			if currentEnemyHrp then
 				myHrp.CFrame = currentEnemyHrp.CFrame * CFrame.new(0, 0, 5)
@@ -356,6 +366,7 @@ local function runAutoFarm()
 			local stopAll = false
 			local vFireCount = 0
 			local promptFireCount = 0
+			local spawnStart = tick()  -- FIX: mốc thời gian bắt đầu spawn
 
 			-- LUỒNG DUY NHẤT
 			task.spawn(function()
@@ -365,7 +376,6 @@ local function runAutoFarm()
 						refreshPrompts()
 					end
 
-					-- BƯỚC 1: V ready -> fire V -> pause 0.75s
 					if isVReady() then
 						pcall(function()
 							remote:FireServer("Tool", tool, "V", vCoord)
@@ -374,7 +384,6 @@ local function runAutoFarm()
 						task.wait(V_CAST_DELAY)
 					end
 
-					-- BƯỚC 2: Spam prompt
 					for i = 1, #promptCache do
 						local v = promptCache[i]
 						if v and v.Parent and v.Enabled then
@@ -390,18 +399,23 @@ local function runAutoFarm()
 				end
 			end)
 
-			-- CHỜ BOSS SPAWN
+			-- CHỜ BOSS SPAWN (FIX: ưu tiên spam đủ MIN_SPAWN_DURATION trước khi thoát)
 			local waitStart = tick()
 			while tick() - waitStart < SEAL_TIMEOUT do
-				if getTarget() then
-					bossSpawned = true
-					break
-				end
+				-- Seal biến mất -> coi như xong
 				if not sealObj or not sealObj.Parent then
 					print("[DEBUG] Seal đã biến mất, coi như thành công!")
 					bossSpawned = true
 					break
 				end
+
+				-- Có enemy + đã spam đủ MIN_SPAWN_DURATION -> thoát sang fight
+				if getTarget() and (tick() - spawnStart) >= MIN_SPAWN_DURATION then
+					print(string.format("[DEBUG] Đã spawn đủ %.1fs, thoát sang fight!", MIN_SPAWN_DURATION))
+					bossSpawned = true
+					break
+				end
+
 				task.wait(0.5)
 			end
 
@@ -409,21 +423,21 @@ local function runAutoFarm()
 			task.wait(0.3)
 
 			if bossSpawned then
-				print(string.format(">>> [SEAL %d] Boss spawn sau %d lần thử! (V: %d, Prompt: %d)",
+				print(string.format(">>> [SEAL %d] Kết thúc spawn sau %d lần thử! (V: %d, Prompt: %d)",
 					sealNum, retryCount, vFireCount, promptFireCount))
 			else
-				warn(string.format("[SEAL %d] Hết %ds chưa spawn! Retry... (V: %d, Prompt: %d)",
+				warn(string.format("[SEAL %d] Hết %ds chưa spawn đủ! Retry... (V: %d, Prompt: %d)",
 					sealNum, SEAL_TIMEOUT, vFireCount, promptFireCount))
 			end
 		end
 
 		if not bossSpawned then
-			warn(string.format("[SEAL %d] Đã thử %d lần nhưng boss vẫn không spawn. Bỏ qua Seal này!", sealNum, MAX_RETRY))
+			warn(string.format("[SEAL %d] Đã thử %d lần nhưng không đạt. Bỏ qua Seal này!", sealNum, MAX_RETRY))
 		end
 		targetSealNum = nil
 	end
 
-	-- PHẦN 7: VÒNG LẶP CHÍNH
+	-- PHẦN 7: VÒNG LẶP CHÍNH (FIX: ưu tiên spawn trước fight)
 	print("Đã cài đặt xong Auto Farm!")
 	while task.wait(0.5) do
 		local char = player.Character
@@ -436,7 +450,12 @@ local function runAutoFarm()
 			continue
 		end
 
-		if hasEnemies then
+		if targetSealNum then
+			-- FIX: ưu tiên processSeal trước, không bị hasEnemies chen ngang
+			isBusy = true
+			processSeal(targetSealNum, myHrp)
+			isBusy = false
+		elseif hasEnemies then
 			local enemy = getTarget()
 			if enemy then
 				isBusy = true
@@ -444,13 +463,7 @@ local function runAutoFarm()
 				isBusy = false
 			end
 		else
-			if targetSealNum then
-				isBusy = true
-				processSeal(targetSealNum, myHrp)
-				isBusy = false
-			else
-				task.wait(1)
-			end
+			task.wait(1)
 		end
 	end
 end
