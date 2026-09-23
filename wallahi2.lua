@@ -38,16 +38,17 @@ end
 -- GIAI ĐOẠN 2: AUTO FARM
 -- ==========================================
 local function runAutoFarm()
-	local remotes    = ReplicatedStorage:WaitForChild("Remotes")
-	local remote     = remotes:WaitForChild("Input")
-	local events     = remotes:WaitForChild("Events")
+	local remotes     = ReplicatedStorage:WaitForChild("Remotes")
+	local remote      = remotes:WaitForChild("Input")
+	local events      = remotes:WaitForChild("Events")
 	local dungeonSync = events:WaitForChild("DungeonInsideSync")
 
 	-- ==========================================
-	-- REPLAY VOTE THREAD
+	-- VOTE EXTREME + REPLAY VOTE (spam 1s/lần)
 	-- ==========================================
 	task.spawn(function()
 		while true do
+			pcall(function() dungeonSync:FireServer("Vote", "Extreme") end)
 			pcall(function() dungeonSync:FireServer("ReplayVote") end)
 			task.wait(1)
 		end
@@ -64,13 +65,11 @@ local function runAutoFarm()
 			local skillDisplay = abilityDisplay:WaitForChild("SkillDisplay", 10)
 			if skillDisplay then
 				local slots = skillDisplay:GetChildren()
-				-- F = slot thứ 9
 				local slotF = slots[9]
 				if slotF then
 					local af = slotF:WaitForChild("AbilityFrame", 5)
 					if af then cdLabelF = af:WaitForChild("Cooldown", 5) end
 				end
-				-- V = slot thứ 10
 				local slotV = slots[10]
 				if slotV then
 					local av = slotV:WaitForChild("AbilityFrame", 5)
@@ -258,7 +257,7 @@ local function runAutoFarm()
 	end
 
 	-- ==========================================
-	-- FIGHT ENEMY (UNDYNE - spam ZXCFVB cùng lúc)
+	-- FIGHT ENEMY (UNDYNE - spam ZXCFVB)
 	-- ==========================================
 	local FIGHT_TIMEOUT = 25
 
@@ -289,7 +288,6 @@ local function runAutoFarm()
 				myHrp.CFrame = currentEnemyHrp.CFrame * CFrame.new(0, 0, 5)
 				pcall(function() remote:FireServer("Dash", currentEnemyHrp.CFrame) end)
 
-				-- Re-equip nếu bị mất tool
 				local t = player.Character and player.Character:FindFirstChild("Undyne")
 				if not t then t = equipTool("Undyne") end
 
@@ -309,15 +307,15 @@ local function runAutoFarm()
 	end
 
 	-- ==========================================
-	-- PROCESS SEAL (The World - spam F tại sealPos)
+	-- PROCESS SEAL (The World - spam F)
 	-- ==========================================
-	local SEAL_TIMEOUT      = 20    -- safety net, giảm 30 -> 20
-	local MAX_RETRY         = 5
-	local PROMPT_SPAM_RATE  = 0.005
+	local SEAL_TIMEOUT         = 20
+	local MAX_RETRY            = 5
+	local PROMPT_SPAM_RATE     = 0.005
 	local PROMPT_CACHE_REFRESH = 2
-	local SEAL_TWEEN_SPEED  = 80
-	local F_CAST_DELAY      = 0.75
-	local F_REFIRE_GUARD    = 2.0
+	local SEAL_TWEEN_SPEED     = 80
+	local F_CAST_DELAY         = 0.75
+	local F_REFIRE_GUARD       = 2.0
 
 	local function processSeal(sealNum, myHrp)
 		print("[SEAL] Tìm Chrono Seal", sealNum)
@@ -335,7 +333,6 @@ local function runAutoFarm()
 		end
 		if not sealObj then targetSealNum = nil return end
 
-		-- EQUIP THE WORLD
 		local tool = equipTool("The World")
 		if not tool then
 			warn("[SEAL] Không có The World!")
@@ -360,7 +357,6 @@ local function runAutoFarm()
 			local promptFireCount = 0
 			local lastFTime = -999
 
-			-- SPAM THREAD
 			local spamThread = task.spawn(function()
 				refreshPrompts()
 				while not stopSpam do
@@ -401,7 +397,6 @@ local function runAutoFarm()
 				end
 			end)
 
-			-- WAIT: seal mất HOẶC boss spawn (KHÔNG chờ MIN_SPAWN_DURATION nữa)
 			local waitStart = tick()
 			while tick() - waitStart < SEAL_TIMEOUT do
 				if not sealObj or not sealObj.Parent then
@@ -409,19 +404,15 @@ local function runAutoFarm()
 					bossSpawned = true
 					break
 				end
-
-				-- Boss spawn = enemy đầu tiên xuất hiện -> thoát ngay để đánh
 				if getTarget() then
 					print("[SEAL] Boss đã spawn -> lao vào đánh!")
 					bossSpawned = true
 					break
 				end
-
 				task.wait(0.2)
 			end
 
 			stopSpam = true
-			-- Cancel thread để không còn fire F sau khi exit
 			pcall(function() task.cancel(spamThread) end)
 			task.wait(0.05)
 
@@ -442,7 +433,6 @@ local function runAutoFarm()
 
 	-- ==========================================
 	-- VÒNG LẶP CHÍNH
-	-- Priority: ENEMY trước -> SEAL sau
 	-- ==========================================
 	local MAIN_TICK = 0.1
 	print("[FARM] Auto Farm đã sẵn sàng!")
@@ -458,12 +448,10 @@ local function runAutoFarm()
 			continue
 		end
 
-		-- PRIORITY 1: ENEMY (dùng Undyne)
 		local enemy = getTarget()
 		if enemy then
 			fightEnemy(enemy, myHrp)
 		else
-			-- PRIORITY 2: SEAL (chỉ khi hết enemy)
 			if targetSealNum then
 				processSeal(targetSealNum, myHrp)
 			else
