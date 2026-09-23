@@ -307,28 +307,26 @@ local function runAutoFarm()
 	end
 
 	-- ==========================================
-	-- PROCESS SEAL (The World - spam F) - FIX BUG
+	-- PROCESS SEAL (The World - F freeze + spam Prompt)
 	-- ==========================================
 	local SEAL_TIMEOUT         = 20
 	local MAX_RETRY            = 5
 	local PROMPT_SPAM_RATE     = 0.005
 	local PROMPT_CACHE_REFRESH = 2
 	local SEAL_TWEEN_SPEED     = 80
-	local F_CAST_DELAY         = 0.75
-	local F_REFIRE_GUARD       = 2.0
+	local PROMPT_RADIUS        = 60  -- chỉ fire prompt gần seal
 
 	local function processSeal(sealNum, myHrp)
 		print("[SEAL] >>> Bắt đầu processSeal:", sealNum)
 
 		local chronoSealFolder = findChronoSealFolder(workspace)
 		if not chronoSealFolder then
-			warn("[SEAL] ❌ Không tìm thấy folder 'Chrono Seal' ở đâu cả!")
+			warn("[SEAL] ❌ Không tìm thấy folder 'Chrono Seal'!")
 			targetSealNum = nil
 			return
 		end
 		print("[SEAL] Folder:", chronoSealFolder:GetFullName())
 
-		-- Tìm seal object: thử nhiều cách
 		local sealObj = nil
 		local function tryFind()
 			local o = chronoSealFolder:FindFirstChild(tostring(sealNum))
@@ -351,19 +349,16 @@ local function runAutoFarm()
 				task.wait(0.1)
 			end
 		end
-
 		if not sealObj then
-			warn("[SEAL] ❌ Không tìm thấy seal '"..tostring(sealNum).."' trong folder!")
-			print("[SEAL] Các object có trong folder:")
+			warn("[SEAL] ❌ Không tìm thấy seal '"..tostring(sealNum).."'!")
 			for _, c in ipairs(chronoSealFolder:GetChildren()) do
 				print("   -", c.Name, c.ClassName)
 			end
 			targetSealNum = nil
 			return
 		end
-		print("[SEAL] ✅ Seal obj:", sealObj:GetFullName(), "| Class:", sealObj.ClassName)
+		print("[SEAL] ✅ Seal:", sealObj:GetFullName(), "| Class:", sealObj.ClassName)
 
-		-- Tính position an toàn (BasePart / Model / Folder)
 		local sealPos
 		if sealObj:IsA("BasePart") then
 			sealPos = sealObj.Position
@@ -371,36 +366,28 @@ local function runAutoFarm()
 			sealPos = sealObj:GetPivot().Position
 		else
 			local part = sealObj:FindFirstChildWhichIsA("BasePart", true)
-			if part then
-				sealPos = part.Position
-				print("[SEAL] Dùng part con:", part:GetFullName())
+			if part then sealPos = part.Position
 			else
-				warn("[SEAL] ❌ Không tìm được position từ seal obj!")
+				warn("[SEAL] ❌ Không lấy được position!")
 				targetSealNum = nil
 				return
 			end
 		end
 		print("[SEAL] Position:", sealPos)
 
-		-- Equip The World
 		local tool = equipTool("The World")
 		if not tool then
-			warn("[SEAL] ❌ Không có The World trong Backpack/Character!")
-			print("[SEAL] Backpack chứa:")
-			local bp = player:FindFirstChild("Backpack")
-			if bp then
-				for _, c in ipairs(bp:GetChildren()) do print("   -", c.Name) end
-			end
+			warn("[SEAL] ❌ Không có The World!")
 			targetSealNum = nil
 			return
 		end
-		print("[SEAL] ✅ Đã equip The World")
 
 		local targetCFrame = CFrame.new(sealPos) * CFrame.new(0, 5, 0)
 		print("[SEAL] Tween tới seal...")
 		safeTween(myHrp, targetCFrame, SEAL_TWEEN_SPEED, true)
-		print("[SEAL] Đã tới seal, bắt đầu spam F...")
+		print("[SEAL] Đã tới seal.")
 
+		local vCoord = vector.create(sealPos.X, sealPos.Y, sealPos.Z)
 		local retryCount = 0
 		local bossSpawned = false
 
@@ -408,11 +395,27 @@ local function runAutoFarm()
 			retryCount = retryCount + 1
 			print(string.format("=== [SEAL %d] Lần %d/%d ===", sealNum, retryCount, MAX_RETRY))
 
-			local vCoord = vector.create(sealPos.X, sealPos.Y, sealPos.Z)
+			-- BƯỚC 1: Cast F (freeze time) — chờ CD nếu cần
+			local fWaitStart = tick()
+			while not isFReady() and tick() - fWaitStart < 5 do
+				task.wait(0.1)
+			end
+
+			local t = player.Character and player.Character:FindFirstChild("The World")
+			if not t then t = equipTool("The World") end
+			if t then
+				local ok = pcall(function()
+					remote:FireServer("Tool", t, "F", vCoord)
+				end)
+				print("[SEAL] Cast F:", ok and "OK" or "FAIL")
+			else
+				warn("[SEAL] ❌ Mất The World trước khi cast F!")
+			end
+			task.wait(0.2)  -- chờ 1 nhịp cho F kích hoạt freeze
+
+			-- BƯỚC 2: Spam ProximityPrompt liên tục (gần seal)
 			local stopSpam = false
-			local fFireCount = 0
 			local promptFireCount = 0
-			local lastFTime = -999
 
 			local spamThread = task.spawn(function()
 				refreshPrompts()
@@ -421,48 +424,40 @@ local function runAutoFarm()
 						refreshPrompts()
 					end
 
-					local t = player.Character and player.Character:FindFirstChild("The World")
-					if not t then t = equipTool("The World") end
-
-					if t then
-						local now = tick()
-						local fCanFire = isFReady() and (now - lastFTime >= F_REFIRE_GUARD)
-
-						if fCanFire then
-							pcall(function()
-								remote:FireServer("Tool", t, "F", vCoord)
-								fFireCount = fFireCount + 1
-							end)
-							lastFTime = now
-							task.wait(F_CAST_DELAY)
-						else
-							for i = 1, #promptCache do
-								local v = promptCache[i]
-								if v and v.Parent and v.Enabled then
-									pcall(function()
-										fireproximityprompt(v)
-										promptFireCount = promptFireCount + 1
-									end)
-									break
-								end
+					for i = 1, #promptCache do
+						local prompt = promptCache[i]
+						if prompt and prompt.Parent and prompt.Enabled then
+							local parentPart = prompt.Parent
+							local pos = nil
+							if parentPart:IsA("BasePart") then
+								pos = parentPart.Position
+							elseif parentPart:IsA("Model") then
+								local pp = parentPart:FindFirstChildWhichIsA("BasePart")
+								if pp then pos = pp.Position end
 							end
-							task.wait(PROMPT_SPAM_RATE)
+
+							if pos and (pos - sealPos).Magnitude < PROMPT_RADIUS then
+								pcall(function()
+									fireproximityprompt(prompt)
+									promptFireCount = promptFireCount + 1
+								end)
+							end
 						end
-					else
-						task.wait(0.1)
 					end
+					task.wait(PROMPT_SPAM_RATE)
 				end
 			end)
 
+			-- CHỜ BOSS SPAWN HOẶC SEAL BIẾN MẤT
 			local waitStart = tick()
 			while tick() - waitStart < SEAL_TIMEOUT do
 				if not sealObj or not sealObj.Parent then
-					print("[SEAL] Seal biến mất -> thành công")
+					print("[SEAL] Seal biến mất -> OK")
 					bossSpawned = true
 					break
 				end
 				if getTarget() then
-					print("[SEAL] Boss đã spawn -> lao vào đánh!")
+					print("[SEAL] Boss spawn -> lao vào đánh!")
 					bossSpawned = true
 					break
 				end
@@ -474,11 +469,11 @@ local function runAutoFarm()
 			task.wait(0.05)
 
 			if bossSpawned then
-				print(string.format(">>> [SEAL %d] Xong sau %d lần (F:%d, Prompt:%d)",
-					sealNum, retryCount, fFireCount, promptFireCount))
+				print(string.format(">>> [SEAL %d] Xong sau %d lần (Prompt:%d)",
+					sealNum, retryCount, promptFireCount))
 			else
-				warn(string.format("[SEAL %d] Timeout %ds (F:%d, Prompt:%d) -> Retry",
-					sealNum, SEAL_TIMEOUT, fFireCount, promptFireCount))
+				warn(string.format("[SEAL %d] Timeout (Prompt:%d) -> Retry",
+					sealNum, promptFireCount))
 			end
 		end
 
@@ -526,7 +521,7 @@ if game.PlaceId == ENTRY_PLACE_ID then
 	runEntrySequence()
 
 elseif game.PlaceId == FARM_PLACE_ID then
-	print("[DISPATCH] Place Farm -> Auto Farm (Araya + The World F)...")
+	print("[DISPATCH] Place Farm -> Auto Farm (Araya + The World F + Prompt)...")
 	task.wait(2)
 	runAutoFarm()
 
