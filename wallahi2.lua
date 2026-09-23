@@ -307,7 +307,7 @@ local function runAutoFarm()
 	end
 
 	-- ==========================================
-	-- PROCESS SEAL (The World - spam F)
+	-- PROCESS SEAL (The World - spam F) - FIX BUG
 	-- ==========================================
 	local SEAL_TIMEOUT         = 20
 	local MAX_RETRY            = 5
@@ -318,31 +318,88 @@ local function runAutoFarm()
 	local F_REFIRE_GUARD       = 2.0
 
 	local function processSeal(sealNum, myHrp)
-		print("[SEAL] Tìm Chrono Seal", sealNum)
-		local chronoSealFolder = findChronoSealFolder(workspace)
-		if not chronoSealFolder then targetSealNum = nil return end
+		print("[SEAL] >>> Bắt đầu processSeal:", sealNum)
 
-		local sealObj = chronoSealFolder:FindFirstChild(tostring(sealNum))
+		local chronoSealFolder = findChronoSealFolder(workspace)
+		if not chronoSealFolder then
+			warn("[SEAL] ❌ Không tìm thấy folder 'Chrono Seal' ở đâu cả!")
+			targetSealNum = nil
+			return
+		end
+		print("[SEAL] Folder:", chronoSealFolder:GetFullName())
+
+		-- Tìm seal object: thử nhiều cách
+		local sealObj = nil
+		local function tryFind()
+			local o = chronoSealFolder:FindFirstChild(tostring(sealNum))
+			if o then return o end
+			for _, c in ipairs(chronoSealFolder:GetChildren()) do
+				if c.Name:match(tostring(sealNum)) then
+					print("[SEAL] Match tên khác:", c.Name, c.ClassName)
+					return c
+				end
+			end
+			return nil
+		end
+
+		sealObj = tryFind()
 		if not sealObj then
 			local timeout = tick() + 5
 			while tick() < timeout do
-				sealObj = chronoSealFolder:FindFirstChild(tostring(sealNum))
+				sealObj = tryFind()
 				if sealObj then break end
 				task.wait(0.1)
 			end
 		end
-		if not sealObj then targetSealNum = nil return end
 
-		local tool = equipTool("The World")
-		if not tool then
-			warn("[SEAL] Không có The World!")
+		if not sealObj then
+			warn("[SEAL] ❌ Không tìm thấy seal '"..tostring(sealNum).."' trong folder!")
+			print("[SEAL] Các object có trong folder:")
+			for _, c in ipairs(chronoSealFolder:GetChildren()) do
+				print("   -", c.Name, c.ClassName)
+			end
 			targetSealNum = nil
 			return
 		end
+		print("[SEAL] ✅ Seal obj:", sealObj:GetFullName(), "| Class:", sealObj.ClassName)
 
-		local sealPos = sealObj:IsA("BasePart") and sealObj.Position or sealObj:GetPivot().Position
+		-- Tính position an toàn (BasePart / Model / Folder)
+		local sealPos
+		if sealObj:IsA("BasePart") then
+			sealPos = sealObj.Position
+		elseif sealObj:IsA("Model") then
+			sealPos = sealObj:GetPivot().Position
+		else
+			local part = sealObj:FindFirstChildWhichIsA("BasePart", true)
+			if part then
+				sealPos = part.Position
+				print("[SEAL] Dùng part con:", part:GetFullName())
+			else
+				warn("[SEAL] ❌ Không tìm được position từ seal obj!")
+				targetSealNum = nil
+				return
+			end
+		end
+		print("[SEAL] Position:", sealPos)
+
+		-- Equip The World
+		local tool = equipTool("The World")
+		if not tool then
+			warn("[SEAL] ❌ Không có The World trong Backpack/Character!")
+			print("[SEAL] Backpack chứa:")
+			local bp = player:FindFirstChild("Backpack")
+			if bp then
+				for _, c in ipairs(bp:GetChildren()) do print("   -", c.Name) end
+			end
+			targetSealNum = nil
+			return
+		end
+		print("[SEAL] ✅ Đã equip The World")
+
 		local targetCFrame = CFrame.new(sealPos) * CFrame.new(0, 5, 0)
+		print("[SEAL] Tween tới seal...")
 		safeTween(myHrp, targetCFrame, SEAL_TWEEN_SPEED, true)
+		print("[SEAL] Đã tới seal, bắt đầu spam F...")
 
 		local retryCount = 0
 		local bossSpawned = false
@@ -450,10 +507,10 @@ local function runAutoFarm()
 
 		local enemy = getTarget()
 		if enemy then
-			fightEnemy(enemy, myHrp)
+			pcall(fightEnemy, enemy, myHrp)
 		else
 			if targetSealNum then
-				processSeal(targetSealNum, myHrp)
+				pcall(processSeal, targetSealNum, myHrp)
 			else
 				task.wait(0.3)
 			end
