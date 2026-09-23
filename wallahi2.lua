@@ -257,15 +257,15 @@ local function runAutoFarm()
 	end
 
 	-- ==========================================
-	-- FIGHT ENEMY (UNDYNE - spam ZXCFVB)
+	-- FIGHT ENEMY (ARAYA - spam ZXCFVB)
 	-- ==========================================
 	local FIGHT_TIMEOUT = 25
 
 	local function fightEnemy(target, myHrp)
 		print("[FIGHT] Đánh:", target.Name)
-		local tool = equipTool("Undyne")
+		local tool = equipTool("Araya")
 		if not tool then
-			warn("[FIGHT] Không có Undyne!")
+			warn("[FIGHT] Không có Araya!")
 			return
 		end
 
@@ -288,8 +288,8 @@ local function runAutoFarm()
 				myHrp.CFrame = currentEnemyHrp.CFrame * CFrame.new(0, 0, 5)
 				pcall(function() remote:FireServer("Dash", currentEnemyHrp.CFrame) end)
 
-				local t = player.Character and player.Character:FindFirstChild("Undyne")
-				if not t then t = equipTool("Undyne") end
+				local t = player.Character and player.Character:FindFirstChild("Araya")
+				if not t then t = equipTool("Araya") end
 
 				if t then
 					local pos = currentEnemyHrp.Position
@@ -469,7 +469,7 @@ if game.PlaceId == ENTRY_PLACE_ID then
 	runEntrySequence()
 
 elseif game.PlaceId == FARM_PLACE_ID then
-	print("[DISPATCH] Place Farm -> Auto Farm (Undyne + The World F)...")
+	print("[DISPATCH] Place Farm -> Auto Farm (Araya + The World F)...")
 	task.wait(2)
 	runAutoFarm()
 
