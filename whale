@@ -1,5 +1,6 @@
 -- ============================================
--- AUTO WHALE v2 — DODGE THÔNG MINH
+-- AUTO WHALE v3 — FLY-OVER-WALL
+-- Bay lên trời vượt tường, không bị kẹt
 -- ============================================
 
 local Players           = game:GetService("Players")
@@ -15,25 +16,18 @@ local Remote      = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Inpu
 local WhaleFolder = workspace:WaitForChild("Whale")
 
 -- ============ CONFIG ============
-local SPEED           = 200
-local STOP_DISTANCE   = 50
-local SCAN_INTERVAL   = 0.5
-local RAY_LENGTH      = 40      -- tăng từ 12 -> 40
-local RAY_SIDE_LENGTH = 25
-local IGNORE_TAGS     = { "Whale" }
+local SPEED          = 200
+local STOP_DISTANCE  = 50
+local SCAN_INTERVAL  = 0.5
 
--- Stuck detection
-local STUCK_TIME      = 0.8     -- bị kẹt 0.8s thì xử lý
-local STUCK_MOVE_MIN  = 5       -- di chuyển < 5 studs/0.8s => kẹt
+local SAFE_HEIGHT    = 80     -- cao hơn tường bao nhiêu studs (so với whale)
+local HIGH_Y_MIN     = 150    -- độ cao Y tối thiểu khi bay
+local H_ARRIVE_XZ    = 40     -- khi XZ cách whale < 40 studs thì bắt đầu hạ
 
 -- ============ STATE ============
 local ENABLED = false
 local currentTarget = nil
 local lastScan      = 0
-local lastPos       = nil
-local stuckTimer    = 0
-local dodgeBias     = 0    -- hướng né ưu tiên: 0 = ko, 1 = phải, -1 = trái
-local verticalBoost = 0    -- thời gian bay chếch lên
 
 -- ============ HELPER ============
 local function getModelPosition(model)
@@ -44,26 +38,6 @@ local function getModelPosition(model)
 end
 
 local function sendDash(cf) Remote:FireServer("Dash", cf) end
-
-local rayParams = RaycastParams.new()
-rayParams.FilterType = Enum.RaycastFilterType.Exclude
-rayParams.IgnoreWater = true
-
-local function refreshRayFilter()
-    local ignore = { char }
-    if currentTarget then table.insert(ignore, currentTarget) end
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("BasePart") then
-            for _, tag in ipairs(IGNORE_TAGS) do
-                if obj:HasTag(tag) then table.insert(ignore, obj); break end
-            end
-            if not obj.CanCollide and not obj.CanTouch then
-                table.insert(ignore, obj)
-            end
-        end
-    end
-    rayParams.FilterDescendantsInstances = ignore
-end
 
 local function findNearestWhale()
     local myPos = hrp.Position
@@ -87,7 +61,6 @@ local function scanFolder(force)
     local newTarget = findNearestWhale()
     if newTarget and newTarget ~= currentTarget then
         currentTarget = newTarget
-        refreshRayFilter()
     elseif not newTarget then
         currentTarget = nil
     end
@@ -96,71 +69,8 @@ end
 WhaleFolder.ChildAdded:Connect(function(child)
     if child:IsA("Model") and ENABLED then
         currentTarget = child
-        refreshRayFilter()
     end
 end)
-
--- ============ DODGE ============
-local function rayBlocked(origin, dir, length)
-    return workspace:Raycast(origin, dir * length, rayParams) ~= nil
-end
-
--- Kiểm tra đường có thông không (bắn nhiều tia song song)
-local function pathClear(origin, dir, length)
-    -- tia trung tâm
-    if rayBlocked(origin, dir, length) then return false end
-    -- tia 2 bên (offset vuông góc) để phát hiện tường hẹp
-    local right = dir:Cross(Vector3.new(0,1,0))
-    if right.Magnitude < 0.01 then right = Vector3.new(1,0,0) else right = right.Unit end
-    local offset = right * 3
-    if rayBlocked(origin + offset, dir, length) then return false end
-    if rayBlocked(origin - offset, dir, length) then return false end
-    return true
-end
-
--- Tìm hướng đi tốt nhất, ưu tiên: thẳng > chếch nhẹ > chếch mạnh > chếch lên
-local function findBestDirection(origin, desiredDir)
-    -- 1. Kiểm tra thẳng
-    if pathClear(origin, desiredDir, RAY_LENGTH) then
-        dodgeBias = 0
-        return desiredDir
-    end
-
-    local right = desiredDir:Cross(Vector3.new(0,1,0))
-    if right.Magnitude < 0.01 then right = Vector3.new(1,0,0) else right = right.Unit end
-
-    -- 2. Thử các góc ngang, ưu tiên hướng đã né thành công (dodgeBias)
-    local angles = { 30, 45, 60, 90, 120, 150 }
-    local order = dodgeBias >= 0 and { 1, -1 } or { -1, 1 }
-
-    for _, angleDeg in ipairs(angles) do
-        for _, sign in ipairs(order) do
-            local rot = (CFrame.Angles(0, math.rad(angleDeg) * sign, 0) * desiredDir).Unit
-            if pathClear(origin, rot, RAY_SIDE_LENGTH) then
-                dodgeBias = sign
-                return rot
-            end
-        end
-    end
-
-    -- 3. Thử chếch LÊN (bay qua tường thấp)
-    for _, upDeg in ipairs({ 30, 45, 60, 75 }) do
-        for _, sign in ipairs(order) do
-            local yaw = CFrame.Angles(0, math.rad(30) * sign, 0)
-            local pitch = CFrame.Angles(math.rad(upDeg), 0, 0)
-            local dir = (yaw * pitch * desiredDir).Unit
-            if pathClear(origin, dir, RAY_SIDE_LENGTH) then
-                dodgeBias = sign
-                verticalBoost = 0.4
-                return dir
-            end
-        end
-    end
-
-    -- 4. Bó tay — bay chéo lên 60° + nghiêng ngang
-    verticalBoost = 0.4
-    return (CFrame.Angles(math.rad(60), math.rad(45 * (dodgeBias or 1)), 0) * desiredDir).Unit
-end
 
 -- ============ ON/OFF ============
 local function setEnabled(state)
@@ -180,8 +90,6 @@ local function setEnabled(state)
             r.AssemblyAngularVelocity = Vector3.zero
         end
     end
-    stuckTimer = 0
-    lastPos = nil
 end
 
 -- ============ UI ============
@@ -189,7 +97,6 @@ local function createUI()
     local gui = Instance.new("ScreenGui")
     gui.Name = "AutoWhaleUI"
     gui.ResetOnSpawn = false
-    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     gui.Parent = LP:WaitForChild("PlayerGui")
 
     local frame = Instance.new("Frame")
@@ -200,7 +107,6 @@ local function createUI()
     frame.Active = true
     frame.Draggable = true
     frame.Parent = gui
-
     Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
     local stroke = Instance.new("UIStroke", frame)
     stroke.Color = Color3.fromRGB(60, 60, 70)
@@ -210,7 +116,7 @@ local function createUI()
     title.Size = UDim2.new(1, 0, 0, 25)
     title.Position = UDim2.new(0, 0, 0, 4)
     title.BackgroundTransparency = 1
-    title.Text = "🐋 AUTO WHALE v2"
+    title.Text = "🐋 AUTO WHALE v3"
     title.Font = Enum.Font.GothamBold
     title.TextSize = 13
     title.TextColor3 = Color3.fromRGB(240, 240, 240)
@@ -231,7 +137,6 @@ local function createUI()
         if ENABLED then
             btn.Text = "ON"
             btn.BackgroundColor3 = Color3.fromRGB(50, 180, 90)
-            refreshRayFilter()
             scanFolder(true)
         else
             btn.Text = "OFF"
@@ -250,12 +155,7 @@ RunService.Heartbeat:Connect(function(dt)
         char = LP.Character or LP.CharacterAdded:Wait()
         hrp  = char:WaitForChild("HumanoidRootPart")
         hum  = char:WaitForChild("Humanoid")
-        if ENABLED then
-            hum.PlatformStand = true
-            hum.WalkSpeed = 0
-        end
-        refreshRayFilter()
-        lastPos = nil
+        if ENABLED then hum.PlatformStand = true; hum.WalkSpeed = 0 end
         return
     end
 
@@ -270,44 +170,39 @@ RunService.Heartbeat:Connect(function(dt)
     local targetPos = getModelPosition(currentTarget)
     if not targetPos then return end
 
-    local myPos    = hrp.CFrame.Position
-    local diff     = targetPos - myPos
+    local myPos = hrp.CFrame.Position
+
+    -- Tính vector tới whale
+    local flatTarget = Vector3.new(targetPos.X, myPos.Y, targetPos.Z)
+    local flatDist   = (flatTarget - myPos).Magnitude
+    local safeY      = math.max(targetPos.Y + SAFE_HEIGHT, HIGH_Y_MIN)
+
+    local moveTarget
+    if myPos.Y < safeY - 5 then
+        -- GIAI ĐOẠN 1: bay thẳng lên tới safeY
+        moveTarget = Vector3.new(myPos.X, safeY, myPos.Z)
+    elseif flatDist > H_ARRIVE_XZ then
+        -- GIAI ĐOẠN 2: bay ngang trên cao tới whale (giữ safeY)
+        moveTarget = Vector3.new(targetPos.X, safeY, targetPos.Z)
+    else
+        -- GIAI ĐOẠN 3: hạ xuống whale
+        moveTarget = Vector3.new(targetPos.X, targetPos.Y + STOP_DISTANCE * 0.3, targetPos.Z)
+    end
+
+    local diff     = moveTarget - myPos
     local distance = diff.Magnitude
 
-    -- ============ STUCK DETECTION ============
-    if lastPos then
-        local moved = (myPos - lastPos).Magnitude
-        if moved < STUCK_MOVE_MIN * dt / 0.8 then
-            stuckTimer = stuckTimer + dt
-        else
-            stuckTimer = math.max(0, stuckTimer - dt * 2)
-        end
-    end
-    lastPos = myPos
-
-    -- Bị kẹt lâu -> đổi hướng ưu tiên + boost lên
-    if stuckTimer >= STUCK_TIME then
-        dodgeBias = -dodgeBias
-        if dodgeBias == 0 then dodgeBias = 1 end
-        verticalBoost = 0.6
-        stuckTimer = 0
+    -- Đến đủ gần whale (3D) thì dừng
+    local trueDistToWhale = (targetPos - myPos).Magnitude
+    if trueDistToWhale <= STOP_DISTANCE then
+        return
     end
 
-    if distance <= STOP_DISTANCE then return end
+    if distance < 0.5 then return end
 
-    -- ============ TÍNH HƯỚNG ============
-    local desiredDir = diff.Unit
-    local moveDir = findBestDirection(myPos, desiredDir)
-
-    -- Áp dụng vertical boost (bay lên khi cần)
-    if verticalBoost > 0 then
-        moveDir = (moveDir + Vector3.new(0, 0.6, 0)).Unit
-        verticalBoost = verticalBoost - dt
-        if verticalBoost < 0 then verticalBoost = 0 end
-    end
-
-    local step   = math.min(SPEED * dt, distance - STOP_DISTANCE)
-    local newPos = myPos + moveDir * step
+    local dir  = diff.Unit
+    local step = math.min(SPEED * dt, distance)
+    local newPos = myPos + dir * step
     local newCF  = CFrame.new(newPos) * (hrp.CFrame - hrp.CFrame.Position)
 
     hrp.CFrame = newCF
@@ -317,4 +212,4 @@ RunService.Heartbeat:Connect(function(dt)
     sendDash(newCF)
 end)
 
-print("[AutoWhale v2] Loaded — click ON để bật")
+print("[AutoWhale v3] Loaded — click ON để bật (Fly-over-wall mode)")
