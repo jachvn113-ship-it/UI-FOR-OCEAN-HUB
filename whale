@@ -1,5 +1,5 @@
 -- ============================================
--- AUTO WHALE v6.1 — STOP 60 STUDS AWAY
+-- AUTO WHALE v8 — NÉ TƯỜNG NHƯNG KHÔNG LÊN TRỜI GẦN WHALE
 -- ============================================
 
 local Players           = game:GetService("Players")
@@ -15,17 +15,22 @@ local Remote      = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Inpu
 local WhaleFolder = workspace:WaitForChild("Whale")
 
 -- ============ CONFIG ============
-local SPEED            = 200
-local SCAN_INTERVAL    = 0.5
+local SPEED           = 200
+local SCAN_INTERVAL   = 0.5
+local SEND_INTERVAL   = 0.05
 
-local STAND_DISTANCE   = 140    -- ⭐ ĐỨNG CÁCH WHALE 60 STUDS
-local HOVER_Y_OFFSET   = 5
+-- Điểm đứng
+local STAND_DISTANCE  = 60    -- cách mép whale
+local HOVER_Y         = 5
+local STOP_XZ_TOL     = 5
 
-local SAFE_HEIGHT      = 60
-local HIGH_Y_MIN       = 120
-local H_ARRIVE_XZ      = 120   -- tăng theo (60 + 60 = 120)
-local DESCEND_SPEED    = 350
-local SEND_INTERVAL    = 0.05
+-- Né tường
+local RAY_LENGTH      = 40    -- tầm nhìn tia laser
+local RAY_SIDE_LENGTH = 25
+local SAFE_HEIGHT     = 60    -- bay cao hơn tường bao nhiêu
+local HIGH_Y_MIN      = 120   -- độ cao Y tối thiểu khi bay lên
+local NO_RISE_DIST    = 200   -- trong khoảng này tới whale thì KHÔNG bay lên nữa
+local IGNORE_TAGS     = { "Whale" }
 
 -- ============ STATE ============
 local ENABLED = false
@@ -40,16 +45,56 @@ for _, g in ipairs(LP:WaitForChild("PlayerGui"):GetChildren()) do
     end
 end
 
+-- ============ RAYCAST ============
+local rayParams = RaycastParams.new()
+rayParams.FilterType = Enum.RaycastFilterType.Exclude
+rayParams.IgnoreWater = true
+
+local function refreshRayFilter()
+    local ignore = { char }
+    if currentTarget then table.insert(ignore, currentTarget) end
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            for _, tag in ipairs(IGNORE_TAGS) do
+                if obj:HasTag(tag) then table.insert(ignore, obj); break end
+            end
+            if not obj.CanCollide and not obj.CanTouch then
+                table.insert(ignore, obj)
+            end
+        end
+    end
+    rayParams.FilterDescendantsInstances = ignore
+end
+
+local function rayBlocked(origin, dir, length)
+    return workspace:Raycast(origin, dir * length, rayParams) ~= nil
+end
+
+-- Kiểm tra đường thẳng có thông không (3 tia song song)
+local function pathClear(origin, dir, length)
+    if rayBlocked(origin, dir, length) then return false end
+    local right = dir:Cross(Vector3.new(0,1,0))
+    if right.Magnitude < 0.01 then right = Vector3.new(1,0,0) else right = right.Unit end
+    if rayBlocked(origin + right * 3, dir, length) then return false end
+    if rayBlocked(origin - right * 3, dir, length) then return false end
+    return true
+end
+
 -- ============ HELPER ============
-local function getWhaleCenter(model)
+local function getWhaleInfo(model)
     if not model or not model.Parent then return nil end
-    local ok, cf = pcall(function()
-        local c = model:GetBoundingBox()
-        return c
+    local ok, cf, size = pcall(function()
+        local c, s = model:GetBoundingBox()
+        return c, s
     end)
-    if ok and cf then return cf.Position end
+    if ok and cf and size then
+        return { center = cf.Position, radius = math.max(size.X, size.Z) * 0.5, size = size }
+    end
     local part = model:FindFirstChildWhichIsA("BasePart", true)
-    return part and part.Position or nil
+    if part then
+        return { center = part.Position, radius = math.max(part.Size.X, part.Size.Z) * 0.5, size = part.Size }
+    end
+    return nil
 end
 
 local function sendDash(cf)
@@ -65,9 +110,9 @@ local function findNearestWhale()
     local best, bestDist = nil, math.huge
     for _, model in ipairs(WhaleFolder:GetChildren()) do
         if model:IsA("Model") then
-            local center = getWhaleCenter(model)
-            if center then
-                local d = (center - myPos).Magnitude
+            local info = getWhaleInfo(model)
+            if info then
+                local d = (info.center - myPos).Magnitude
                 if d < bestDist then best, bestDist = model, d end
             end
         end
@@ -82,6 +127,7 @@ local function scanFolder(force)
     local newTarget = findNearestWhale()
     if newTarget and newTarget ~= currentTarget then
         currentTarget = newTarget
+        refreshRayFilter()
     elseif not newTarget then
         currentTarget = nil
     end
@@ -90,6 +136,7 @@ end
 WhaleFolder.ChildAdded:Connect(function(child)
     if child:IsA("Model") and ENABLED then
         currentTarget = child
+        refreshRayFilter()
     end
 end)
 
@@ -121,7 +168,7 @@ local function createUI()
     gui.Parent = LP:WaitForChild("PlayerGui")
 
     local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0, 200, 0, 85)
+    frame.Size = UDim2.new(0, 220, 0, 85)
     frame.Position = UDim2.new(0, 20, 0, 100)
     frame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
     frame.BorderSizePixel = 0
@@ -137,7 +184,7 @@ local function createUI()
     title.Size = UDim2.new(1, 0, 0, 25)
     title.Position = UDim2.new(0, 0, 0, 4)
     title.BackgroundTransparency = 1
-    title.Text = "🐋 AUTO WHALE v6.1"
+    title.Text = "🐋 AUTO WHALE v8"
     title.Font = Enum.Font.GothamBold
     title.TextSize = 13
     title.TextColor3 = Color3.fromRGB(240, 240, 240)
@@ -202,67 +249,84 @@ RunService.Heartbeat:Connect(function(dt)
         return
     end
 
-    local center = getWhaleCenter(currentTarget)
-    if not center then return end
+    local info = getWhaleInfo(currentTarget)
+    if not info then return end
 
-    local myPos = hrp.Position
+    local myPos  = hrp.Position
+    local center = info.center
 
-    -- Vector ngang từ whale tới player
+    -- Vector ngang từ tâm whale tới player
     local horiz = Vector3.new(myPos.X - center.X, 0, myPos.Z - center.Z)
-    if horiz.Magnitude < 0.1 then
-        horiz = Vector3.new(1, 0, 0)
-    end
+    if horiz.Magnitude < 0.1 then horiz = Vector3.new(1, 0, 0) end
     local horizUnit = horiz.Unit
 
-    -- Điểm đứng: cách whale 60 studs XZ, ngang tầm Y whale
-    local standXZ = Vector3.new(center.X, 0, center.Z) + horizUnit * STAND_DISTANCE
-    local standY  = center.Y + HOVER_Y_OFFSET
-    local standPos = Vector3.new(standXZ.X, standY, standXZ.Z)
+    -- Điểm đứng (cách mép whale STAND_DISTANCE)
+    local standRadius = info.radius + STAND_DISTANCE
+    local standXZ     = Vector3.new(center.X, 0, center.Z) + horizUnit * standRadius
+    local standY      = center.Y + HOVER_Y
+    local standPos    = Vector3.new(standXZ.X, standY, standZ or standXZ.Z)
 
-    local flatDist = horiz.Magnitude
-    local dy = myPos.Y - standY
+    local distToCenter = horiz.Magnitude
+    local distToStand  = (standPos - myPos).Magnitude
 
     -- ============ STOP ============
-    if flatDist <= STAND_DISTANCE + 3 and math.abs(dy) <= 6 then
-        statusLabel.Text = string.format("✅ ĐÃ ĐỨNG (XZ:%.0f | Y:%.0f)", flatDist, dy)
+    if math.abs(distToCenter - standRadius) <= STOP_XZ_TOL
+       and math.abs(myPos.Y - standY) <= 6 then
+        statusLabel.Text = string.format("✅ ĐÃ ĐỨNG (cách mép:%.0f)", distToCenter - info.radius)
         return
     end
 
-    -- ============ QUYẾT ĐỊNH ============
-    local moveTarget, speed
+    -- ============ XÁC ĐỊNH CÓ ĐƯỢC PHÉP BAY LÊN KHÔNG ============
+    -- Khoảng cách XZ tới mép whale
+    local edgeDist = distToCenter - info.radius
+    -- Chỉ được bay lên khi: CÒN XA whale (ngoài NO_RISE_DIST) VÀ đường bị chặn
+    local allowRise = edgeDist > NO_RISE_DIST
 
-    if flatDist > H_ARRIVE_XZ then
-        local safeY = math.max(center.Y + SAFE_HEIGHT, HIGH_Y_MIN)
-        if myPos.Y < safeY - 10 then
-            statusLabel.Text = string.format("rise | XZ:%.0f", flatDist)
-            speed = SPEED
-            moveTarget = Vector3.new(myPos.X, safeY, myPos.Z)
-        else
-            statusLabel.Text = string.format("fly  | XZ:%.0f", flatDist)
-            speed = SPEED
-            moveTarget = Vector3.new(standXZ.X, safeY, standXZ.Z)
+    local moveTarget = standPos
+    local speed      = SPEED
+    local phaseText  = "fly"
+
+    if allowRise then
+        -- Kiểm tra đường thẳng tới điểm đứng có thông không
+        local dirToStand = (standPos - myPos)
+        local flatDir    = Vector3.new(dirToStand.X, 0, dirToStand.Z)
+        local len        = math.min(flatDir.Magnitude, RAY_LENGTH)
+        if len > 0.1 then
+            local checkDir = flatDir.Unit
+            if not pathClear(myPos, checkDir, len) then
+                -- CÓ VẬT CẢN → BAY LÊN
+                local safeY = math.max(center.Y + SAFE_HEIGHT, HIGH_Y_MIN)
+                if myPos.Y < safeY - 10 then
+                    phaseText = "rise"
+                    moveTarget = Vector3.new(myPos.X, safeY, myPos.Z)
+                else
+                    phaseText = "fly-high"
+                    moveTarget = Vector3.new(standXZ.X, safeY, standXZ.Z)
+                end
+            end
         end
     else
-        statusLabel.Text = string.format("descend | XZ:%.0f | Y:%.0f", flatDist, dy)
-        speed = DESCEND_SPEED
-        moveTarget = standPos
+        -- GẦN WHALE → KHÔNG bay lên, đi thẳng tới điểm đứng
+        phaseText = "final"
+        speed = SPEED
     end
 
-    -- ============ DI CHUYỂN ============
+    if distToStand < 0.5 then return end
+
     local diff     = moveTarget - myPos
     local distance = diff.Magnitude
-    if distance < 0.5 then return end
-
-    local dir  = diff.Unit
-    local step = math.min(speed * dt, distance)
-    local newPos = myPos + dir * step
-    local newCF  = CFrame.new(newPos) * (hrp.CFrame - hrp.CFrame.Position)
+    local dir      = diff.Unit
+    local step     = math.min(speed * dt, distance)
+    local newPos   = myPos + dir * step
+    local newCF    = CFrame.new(newPos) * (hrp.CFrame - hrp.CFrame.Position)
 
     hrp.CFrame = newCF
     hrp.AssemblyLinearVelocity  = Vector3.zero
     hrp.AssemblyAngularVelocity = Vector3.zero
 
     sendDash(newCF)
+
+    statusLabel.Text = string.format("%s | cách mép:%.0f | Y:%.0f", phaseText, edgeDist, myPos.Y - standY)
 end)
 
-print("[AutoWhale v6.1] Loaded — click ON để bật (stand 60 studs)")
+print("[AutoWhale v8] Loaded — né tường khi xa, đi thẳng khi gần whale")
