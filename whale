@@ -1,5 +1,5 @@
 -- ============================================
--- AUTO WHALE v6 — STOP 40 STUDS AWAY
+-- AUTO WHALE v6.1 — STOP 60 STUDS AWAY
 -- ============================================
 
 local Players           = game:GetService("Players")
@@ -18,12 +18,12 @@ local WhaleFolder = workspace:WaitForChild("Whale")
 local SPEED            = 200
 local SCAN_INTERVAL    = 0.5
 
-local STAND_DISTANCE   = 40    -- ⭐ đứng cách whale 40 studs
-local HOVER_Y_OFFSET   = 5     -- ngang tầm Y whale + 5
+local STAND_DISTANCE   = 60    -- ⭐ ĐỨNG CÁCH WHALE 60 STUDS
+local HOVER_Y_OFFSET   = 5
 
 local SAFE_HEIGHT      = 60
 local HIGH_Y_MIN       = 120
-local H_ARRIVE_XZ      = 100   -- XZ < 100 thì bắt đầu hạ
+local H_ARRIVE_XZ      = 120   -- tăng theo (60 + 60 = 120)
 local DESCEND_SPEED    = 350
 local SEND_INTERVAL    = 0.05
 
@@ -137,7 +137,7 @@ local function createUI()
     title.Size = UDim2.new(1, 0, 0, 25)
     title.Position = UDim2.new(0, 0, 0, 4)
     title.BackgroundTransparency = 1
-    title.Text = "🐋 AUTO WHALE v6"
+    title.Text = "🐋 AUTO WHALE v6.1"
     title.Font = Enum.Font.GothamBold
     title.TextSize = 13
     title.TextColor3 = Color3.fromRGB(240, 240, 240)
@@ -210,24 +210,21 @@ RunService.Heartbeat:Connect(function(dt)
     -- Vector ngang từ whale tới player
     local horiz = Vector3.new(myPos.X - center.X, 0, myPos.Z - center.Z)
     if horiz.Magnitude < 0.1 then
-        horiz = Vector3.new(1, 0, 0)  -- nếu trùng XZ whale thì chọn hướng mặc định
+        horiz = Vector3.new(1, 0, 0)
     end
     local horizUnit = horiz.Unit
 
-    -- Điểm đứng mục tiêu: cách whale 40 studs theo phương ngang, ngang tầm Y whale
+    -- Điểm đứng: cách whale 60 studs XZ, ngang tầm Y whale
     local standXZ = Vector3.new(center.X, 0, center.Z) + horizUnit * STAND_DISTANCE
     local standY  = center.Y + HOVER_Y_OFFSET
     local standPos = Vector3.new(standXZ.X, standY, standXZ.Z)
 
-    -- Khoảng cách ngang hiện tại tới whale center
     local flatDist = horiz.Magnitude
-
-    -- Khoảng cách tới điểm đứng
-    local distToStand = (standPos - myPos).Magnitude
+    local dy = myPos.Y - standY
 
     -- ============ STOP ============
-    if flatDist <= STAND_DISTANCE + 3 and math.abs(myPos.Y - standY) <= 6 then
-        statusLabel.Text = string.format("✅ ĐÃ ĐỨNG (XZ:%.0f | Y:%.0f)", flatDist, myPos.Y - standY)
+    if flatDist <= STAND_DISTANCE + 3 and math.abs(dy) <= 6 then
+        statusLabel.Text = string.format("✅ ĐÃ ĐỨNG (XZ:%.0f | Y:%.0f)", flatDist, dy)
         return
     end
 
@@ -235,7 +232,6 @@ RunService.Heartbeat:Connect(function(dt)
     local moveTarget, speed
 
     if flatDist > H_ARRIVE_XZ then
-        -- CÒN XA: bay cao vượt tường
         local safeY = math.max(center.Y + SAFE_HEIGHT, HIGH_Y_MIN)
         if myPos.Y < safeY - 10 then
             statusLabel.Text = string.format("rise | XZ:%.0f", flatDist)
@@ -247,8 +243,7 @@ RunService.Heartbeat:Connect(function(dt)
             moveTarget = Vector3.new(standXZ.X, safeY, standXZ.Z)
         end
     else
-        -- ĐÃ GẦN XZ: hạ xuống ĐIỂM ĐỨNG (cách 40 studs, ngang Y whale)
-        statusLabel.Text = string.format("descend | XZ:%.0f | Y:%.0f", flatDist, myPos.Y - standY)
+        statusLabel.Text = string.format("descend | XZ:%.0f | Y:%.0f", flatDist, dy)
         speed = DESCEND_SPEED
         moveTarget = standPos
     end
@@ -270,4 +265,4 @@ RunService.Heartbeat:Connect(function(dt)
     sendDash(newCF)
 end)
 
-print("[AutoWhale v6] Loaded — click ON để bật")
+print("[AutoWhale v6.1] Loaded — click ON để bật (stand 60 studs)")
