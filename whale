@@ -1,0 +1,252 @@
+-- ============================================
+-- AUTO WHALE + DODGE + UI TOGGLE
+-- ============================================
+
+local Players           = game:GetService("Players")
+local RunService        = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UIS               = game:GetService("UserInputService")
+
+local LP   = Players.LocalPlayer
+local char = LP.Character or LP.CharacterAdded:Wait()
+local hrp  = char:WaitForChild("HumanoidRootPart")
+local hum  = char:WaitForChild("Humanoid")
+
+local Remote      = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Input")
+local WhaleFolder = workspace:WaitForChild("Whale")
+
+-- ============ CONFIG ============
+local SPEED          = 200
+local STOP_DISTANCE  = 50
+local SCAN_INTERVAL  = 0.5
+local RAY_LENGTH     = 12
+local IGNORE_TAGS    = { "Whale" }
+
+-- ============ STATE ============
+local ENABLED = false
+local currentTarget = nil
+local lastScan      = 0
+
+-- ============ HELPER ============
+local function getModelPosition(model)
+    if not model or not model.Parent then return nil end
+    if model.PrimaryPart then return model.PrimaryPart.Position end
+    local part = model:FindFirstChildWhichIsA("BasePart", true)
+    return part and part.Position or nil
+end
+
+local function sendDash(cf) Remote:FireServer("Dash", cf) end
+
+local rayParams = RaycastParams.new()
+rayParams.FilterType = Enum.RaycastFilterType.Exclude
+rayParams.IgnoreWater = true
+
+local function refreshRayFilter()
+    local ignore = { char }
+    if currentTarget then table.insert(ignore, currentTarget) end
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            for _, tag in ipairs(IGNORE_TAGS) do
+                if obj:HasTag(tag) then table.insert(ignore, obj); break end
+            end
+            if not obj.CanCollide and not obj.CanTouch then
+                table.insert(ignore, obj)
+            end
+        end
+    end
+    rayParams.FilterDescendantsInstances = ignore
+end
+
+local function findNearestWhale()
+    local myPos = hrp.Position
+    local best, bestDist = nil, math.huge
+    for _, model in ipairs(WhaleFolder:GetChildren()) do
+        if model:IsA("Model") then
+            local pos = getModelPosition(model)
+            if pos then
+                local d = (pos - myPos).Magnitude
+                if d < bestDist then best, bestDist = model, d end
+            end
+        end
+    end
+    return best
+end
+
+local function scanFolder(force)
+    local now = tick()
+    if not force and now - lastScan < SCAN_INTERVAL then return end
+    lastScan = now
+    local newTarget = findNearestWhale()
+    if newTarget and newTarget ~= currentTarget then
+        currentTarget = newTarget
+        refreshRayFilter()
+    elseif not newTarget then
+        currentTarget = nil
+    end
+end
+
+WhaleFolder.ChildAdded:Connect(function(child)
+    if child:IsA("Model") and ENABLED then
+        currentTarget = child
+        refreshRayFilter()
+    end
+end)
+
+-- ============ DODGE ============
+local function rayHits(origin, dir, length)
+    return workspace:Raycast(origin, dir * length, rayParams) ~= nil
+end
+
+local function computeAvoidedDirection(origin, desiredDir)
+    if not rayHits(origin, desiredDir, RAY_LENGTH) then return desiredDir end
+
+    local up = Vector3.new(0, 1, 0)
+    local right = desiredDir:Cross(up)
+    right = right.Magnitude < 0.01 and Vector3.new(1,0,0) or right.Unit
+
+    for _, angleDeg in ipairs({ 30, 45, 60, 90, 120 }) do
+        for _, sign in ipairs({ 1, -1 }) do
+            local rot = (CFrame.Angles(0, math.rad(angleDeg) * sign, 0) * desiredDir).Unit
+            if not rayHits(origin + rot, rot, RAY_LENGTH) then
+                return rot
+            end
+        end
+    end
+    return desiredDir
+end
+
+-- ============ ON / OFF ============
+local function setEnabled(state)
+    ENABLED = state
+    local c = LP.Character
+    if c then
+        local h = c:FindFirstChildOfClass("Humanoid")
+        local r = c:FindFirstChild("HumanoidRootPart")
+        if h then
+            h.PlatformStand = state
+            h.WalkSpeed     = state and 0 or 16
+            h.JumpPower     = state and 0 or 50
+            h.UseJumpPower  = true
+        end
+        if r then
+            r.AssemblyLinearVelocity  = Vector3.zero
+            r.AssemblyAngularVelocity = Vector3.zero
+        end
+    end
+end
+
+-- ============ UI ============
+local function createUI()
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "AutoWhaleUI"
+    gui.ResetOnSpawn = false
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    gui.Parent = LP:WaitForChild("PlayerGui")
+
+    local frame = Instance.new("Frame")
+    frame.Name = "Main"
+    frame.Size = UDim2.new(0, 180, 0, 60)
+    frame.Position = UDim2.new(0, 20, 0, 100)
+    frame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+    frame.BorderSizePixel = 0
+    frame.Active = true
+    frame.Draggable = true
+    frame.Parent = gui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 10)
+    corner.Parent = frame
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(60, 60, 70)
+    stroke.Thickness = 1.5
+    stroke.Parent = frame
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, 0, 0, 25)
+    title.Position = UDim2.new(0, 0, 0, 4)
+    title.BackgroundTransparency = 1
+    title.Text = "🐋 AUTO WHALE"
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 13
+    title.TextColor3 = Color3.fromRGB(240, 240, 240)
+    title.Parent = frame
+
+    local btn = Instance.new("TextButton")
+    btn.Name = "ToggleBtn"
+    btn.Size = UDim2.new(1, -20, 0, 26)
+    btn.Position = UDim2.new(0, 10, 0, 30)
+    btn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    btn.BorderSizePixel = 0
+    btn.Text = "OFF"
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 14
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Parent = frame
+
+    local btnCorner = Instance.new("UICorner")
+    btnCorner.CornerRadius = UDim.new(0, 6)
+    btnCorner.Parent = btn
+
+    btn.MouseButton1Click:Connect(function()
+        setEnabled(not ENABLED)
+        if ENABLED then
+            btn.Text = "ON"
+            btn.BackgroundColor3 = Color3.fromRGB(50, 180, 90)
+            refreshRayFilter()
+            scanFolder(true)
+        else
+            btn.Text = "OFF"
+            btn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+        end
+    end)
+
+    return gui
+end
+
+createUI()
+
+-- ============ MAIN LOOP ============
+RunService.Heartbeat:Connect(function(dt)
+    if not char.Parent or not hrp.Parent then
+        char = LP.Character or LP.CharacterAdded:Wait()
+        hrp  = char:WaitForChild("HumanoidRootPart")
+        hum  = char:WaitForChild("Humanoid")
+        if ENABLED then
+            hum.PlatformStand = true
+            hum.WalkSpeed = 0
+        end
+        refreshRayFilter()
+        return
+    end
+
+    if not ENABLED then return end
+
+    scanFolder(false)
+    if not currentTarget or not currentTarget.Parent then
+        currentTarget = nil
+        return
+    end
+
+    local targetPos = getModelPosition(currentTarget)
+    if not targetPos then return end
+
+    local myPos    = hrp.CFrame.Position
+    local diff     = targetPos - myPos
+    local distance = diff.Magnitude
+
+    if distance <= STOP_DISTANCE then return end
+
+    local moveDir  = computeAvoidedDirection(myPos, diff.Unit)
+    local step     = math.min(SPEED * dt, distance - STOP_DISTANCE)
+    local newPos   = myPos + moveDir * step
+    local newCF    = CFrame.new(newPos) * (hrp.CFrame - hrp.CFrame.Position)
+
+    hrp.CFrame = newCF
+    hrp.AssemblyLinearVelocity  = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
+
+    sendDash(newCF)
+end)
+
+print("[AutoWhale] UI đã load — kéo để di chuyển, click OFF/ON để bật tắt")
