@@ -1,5 +1,5 @@
 -- ============================================
--- AUTO WHALE v5 — LAND ON TOP (không đâm vào whale)
+-- AUTO WHALE v6 — STOP 40 STUDS AWAY
 -- ============================================
 
 local Players           = game:GetService("Players")
@@ -15,49 +15,41 @@ local Remote      = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Inpu
 local WhaleFolder = workspace:WaitForChild("Whale")
 
 -- ============ CONFIG ============
-local SPEED           = 200
-local SCAN_INTERVAL   = 0.5
+local SPEED            = 200
+local SCAN_INTERVAL    = 0.5
 
-local STOP_XZ         = 50    -- bán kính XZ dừng
-local STOP_HEIGHT     = 15    -- sai lệch Y tối đa so với đỉnh whale
-local HOVER_OFFSET    = 8     -- bay cao hơn đỉnh whale 8 studs (tránh đâm)
+local STAND_DISTANCE   = 40    -- ⭐ đứng cách whale 40 studs
+local HOVER_Y_OFFSET   = 5     -- ngang tầm Y whale + 5
 
-local SAFE_HEIGHT     = 60    -- bay cao hơn đỉnh whale khi vượt tường
-local HIGH_Y_MIN      = 120
-local H_ARRIVE_XZ     = 80    -- XZ < 80 thì bắt đầu hạ
-local DESCEND_SPEED   = 350
-local SEND_INTERVAL   = 0.05  -- rate-limit gửi remote
+local SAFE_HEIGHT      = 60
+local HIGH_Y_MIN       = 120
+local H_ARRIVE_XZ      = 100   -- XZ < 100 thì bắt đầu hạ
+local DESCEND_SPEED    = 350
+local SEND_INTERVAL    = 0.05
 
 -- ============ STATE ============
 local ENABLED = false
 local currentTarget = nil
 local lastScan = 0
 local lastSend = 0
-local phase = "idle"
+
+-- ============ XOÁ UI CŨ ============
+for _, g in ipairs(LP:WaitForChild("PlayerGui"):GetChildren()) do
+    if g.Name == "AutoWhaleUI" or g.Name:match("^AutoWhaleUI") then
+        g:Destroy()
+    end
+end
 
 -- ============ HELPER ============
--- Lấy thông tin whale: tâm + đỉnh + kích thước
-local function getWhaleInfo(model)
+local function getWhaleCenter(model)
     if not model or not model.Parent then return nil end
-    local ok, cf, size = pcall(function()
-        local c, s = model:GetBoundingBox()
-        return c, s
+    local ok, cf = pcall(function()
+        local c = model:GetBoundingBox()
+        return c
     end)
-    if ok and cf and size then
-        return {
-            center = cf.Position,
-            top    = cf.Position.Y + size.Y / 2,
-            size   = size
-        }
-    end
-    -- fallback nếu GetBoundingBox lỗi
+    if ok and cf then return cf.Position end
     local part = model:FindFirstChildWhichIsA("BasePart", true)
-    if not part then return nil end
-    return {
-        center = part.Position,
-        top    = part.Position.Y + part.Size.Y / 2,
-        size   = part.Size
-    }
+    return part and part.Position or nil
 end
 
 local function sendDash(cf)
@@ -73,9 +65,9 @@ local function findNearestWhale()
     local best, bestDist = nil, math.huge
     for _, model in ipairs(WhaleFolder:GetChildren()) do
         if model:IsA("Model") then
-            local info = getWhaleInfo(model)
-            if info then
-                local d = (info.center - myPos).Magnitude
+            local center = getWhaleCenter(model)
+            if center then
+                local d = (center - myPos).Magnitude
                 if d < bestDist then best, bestDist = model, d end
             end
         end
@@ -104,7 +96,6 @@ end)
 -- ============ ON/OFF ============
 local function setEnabled(state)
     ENABLED = state
-    phase = "idle"
     local c = LP.Character
     if c then
         local h = c:FindFirstChildOfClass("Humanoid")
@@ -146,7 +137,7 @@ local function createUI()
     title.Size = UDim2.new(1, 0, 0, 25)
     title.Position = UDim2.new(0, 0, 0, 4)
     title.BackgroundTransparency = 1
-    title.Text = "🐋 AUTO WHALE v5"
+    title.Text = "🐋 AUTO WHALE v6"
     title.Font = Enum.Font.GothamBold
     title.TextSize = 13
     title.TextColor3 = Color3.fromRGB(240, 240, 240)
@@ -211,57 +202,60 @@ RunService.Heartbeat:Connect(function(dt)
         return
     end
 
-    local info = getWhaleInfo(currentTarget)
-    if not info then return end
+    local center = getWhaleCenter(currentTarget)
+    if not center then return end
 
-    local myPos    = hrp.Position
-    local whaleTop = info.top
-    local targetY  = whaleTop + HOVER_OFFSET    -- điểm hạ cánh = trên đỉnh whale
+    local myPos = hrp.Position
 
-    -- Khoảng cách XZ (không tính Y)
-    local dxz = Vector3.new(info.center.X - myPos.X, 0, info.center.Z - myPos.Z)
-    local flatDist = dxz.Magnitude
+    -- Vector ngang từ whale tới player
+    local horiz = Vector3.new(myPos.X - center.X, 0, myPos.Z - center.Z)
+    if horiz.Magnitude < 0.1 then
+        horiz = Vector3.new(1, 0, 0)  -- nếu trùng XZ whale thì chọn hướng mặc định
+    end
+    local horizUnit = horiz.Unit
 
-    -- Khoảng cách Y tới điểm hạ cánh
-    local dy = myPos.Y - targetY
+    -- Điểm đứng mục tiêu: cách whale 40 studs theo phương ngang, ngang tầm Y whale
+    local standXZ = Vector3.new(center.X, 0, center.Z) + horizUnit * STAND_DISTANCE
+    local standY  = center.Y + HOVER_Y_OFFSET
+    local standPos = Vector3.new(standXZ.X, standY, standXZ.Z)
 
-    -- ============ STOP CONDITION ============
-    -- Đã ở trên đầu whale và ngang tầm đỉnh
-    if flatDist <= STOP_XZ and math.abs(dy) <= STOP_HEIGHT then
-        statusLabel.Text = string.format("✅ ĐÃ TỚI (XZ:%.0f | Y:%.0f)", flatDist, dy)
+    -- Khoảng cách ngang hiện tại tới whale center
+    local flatDist = horiz.Magnitude
+
+    -- Khoảng cách tới điểm đứng
+    local distToStand = (standPos - myPos).Magnitude
+
+    -- ============ STOP ============
+    if flatDist <= STAND_DISTANCE + 3 and math.abs(myPos.Y - standY) <= 6 then
+        statusLabel.Text = string.format("✅ ĐÃ ĐỨNG (XZ:%.0f | Y:%.0f)", flatDist, myPos.Y - standY)
         return
     end
 
-    -- ============ QUYẾT ĐỊNH HƯỚNG ============
+    -- ============ QUYẾT ĐỊNH ============
     local moveTarget, speed
 
     if flatDist > H_ARRIVE_XZ then
         -- CÒN XA: bay cao vượt tường
-        local safeY = math.max(whaleTop + SAFE_HEIGHT, HIGH_Y_MIN)
+        local safeY = math.max(center.Y + SAFE_HEIGHT, HIGH_Y_MIN)
         if myPos.Y < safeY - 10 then
-            -- BAY LÊN
-            phase = "rise"
+            statusLabel.Text = string.format("rise | XZ:%.0f", flatDist)
             speed = SPEED
             moveTarget = Vector3.new(myPos.X, safeY, myPos.Z)
         else
-            -- BAY NGANG TRÊN CAO
-            phase = "fly"
+            statusLabel.Text = string.format("fly  | XZ:%.0f", flatDist)
             speed = SPEED
-            moveTarget = Vector3.new(info.center.X, safeY, info.center.Z)
+            moveTarget = Vector3.new(standXZ.X, safeY, standXZ.Z)
         end
     else
-        -- ĐÃ GẦN XZ: HẠ XUỐNG TỚI ĐỈNH WHALE
-        phase = "descend"
+        -- ĐÃ GẦN XZ: hạ xuống ĐIỂM ĐỨNG (cách 40 studs, ngang Y whale)
+        statusLabel.Text = string.format("descend | XZ:%.0f | Y:%.0f", flatDist, myPos.Y - standY)
         speed = DESCEND_SPEED
-        moveTarget = Vector3.new(info.center.X, targetY, info.center.Z)
+        moveTarget = standPos
     end
-
-    statusLabel.Text = string.format("%s | XZ:%.0f | Y:%.0f", phase, flatDist, dy)
 
     -- ============ DI CHUYỂN ============
     local diff     = moveTarget - myPos
     local distance = diff.Magnitude
-
     if distance < 0.5 then return end
 
     local dir  = diff.Unit
@@ -276,4 +270,4 @@ RunService.Heartbeat:Connect(function(dt)
     sendDash(newCF)
 end)
 
-print("[AutoWhale v5] Loaded — click ON để bật")
+print("[AutoWhale v6] Loaded — click ON để bật")
