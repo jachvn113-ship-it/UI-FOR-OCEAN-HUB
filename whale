@@ -1,5 +1,5 @@
 -- ============================================
--- AUTO WHALE v9 — CAP RADIUS + STUCK DETECTION
+-- AUTO WHALE v10 — STAND POS CỐ ĐỊNH
 -- ============================================
 
 local Players           = game:GetService("Players")
@@ -17,24 +17,25 @@ local WhaleFolder = workspace:WaitForChild("Whale")
 -- ============ CONFIG ============
 local SPEED           = 200
 local SCAN_INTERVAL   = 0.5
-local SEND_INTERVAL   = 0.08   -- giảm xuống 12/s tránh spam
+local SEND_INTERVAL   = 0.08
 
 local STAND_DISTANCE  = 60
 local HOVER_Y         = 5
-local STOP_XZ_TOL     = 8
+local STOP_TOL        = 10    -- dung sai dừng (studs, 3D)
+local MAX_RADIUS      = 300
 
-local MAX_RADIUS      = 300    -- ⭐ cap bán kính whale (chống bbox effect)
 local RAY_LENGTH      = 40
 local SAFE_HEIGHT     = 60
 local HIGH_Y_MIN      = 120
 local NO_RISE_DIST    = 250
 local IGNORE_TAGS     = { "Whale", "Effect", "VFX", "Beam" }
-
-local STUCK_TIME      = 1.0    -- không di chuyển 1s → xử lý
+local STUCK_TIME      = 1.0
 
 -- ============ STATE ============
 local ENABLED = false
 local currentTarget = nil
+local frozenStandPos = nil    -- ⭐ điểm đứng được đóng băng
+local frozenStandRadius = nil
 local lastScan = 0
 local lastSend = 0
 local lastPos = nil
@@ -57,7 +58,6 @@ local function refreshRayFilter()
     local ignore = { char }
     if currentTarget then
         table.insert(ignore, currentTarget)
-        -- Bỏ qua tất cả part trong whale (kể cả effect)
         for _, d in ipairs(currentTarget:GetDescendants()) do
             if d:IsA("BasePart") then table.insert(ignore, d) end
         end
@@ -70,44 +70,34 @@ local function rayBlocked(origin, dir, length)
 end
 
 -- ============ HELPER ============
--- Lấy thông tin whale — ưu tiên PrimaryPart, cap radius
 local function getWhaleInfo(model)
     if not model or not model.Parent then return nil end
 
-    -- 1. Ưu tiên PrimaryPart
     local center
     if model.PrimaryPart then
         center = model.PrimaryPart.Position
     else
-        -- 2. Fallback: part to nhất trong model
-        local biggest, biggestSize = nil, 0
+        local biggest, bs = nil, 0
         for _, d in ipairs(model:GetDescendants()) do
             if d:IsA("BasePart") then
                 local sz = d.Size.Magnitude
-                if sz > biggestSize then
-                    biggest, biggestSize = d, sz
-                end
+                if sz > bs then biggest, bs = d, sz end
             end
         end
-        if biggest then
-            center = biggest.Position
-        else
-            -- 3. Fallback cuối: bounding box
+        if biggest then center = biggest.Position end
+        if not center then
             local ok, cf = pcall(function() return model:GetBoundingBox() end)
             if ok and cf then center = cf.Position end
         end
     end
     if not center then return nil end
 
-    -- Radius: tính từ part to nhất, cap ở MAX_RADIUS
-    local radius = 30  -- mặc định
+    local radius = 30
     local biggest = 0
     for _, d in ipairs(model:GetDescendants()) do
         if d:IsA("BasePart") then
             local r = math.max(d.Size.X, d.Size.Z) * 0.5
-            if r > biggest and r <= MAX_RADIUS then
-                biggest = r
-            end
+            if r > biggest and r <= MAX_RADIUS then biggest = r end
         end
     end
     if biggest > 0 then radius = biggest end
@@ -138,23 +128,58 @@ local function findNearestWhale()
     return best
 end
 
+-- ⭐ Đóng băng điểm đứng dựa vào hướng player hiện tại tới whale
+local function freezeStandPos()
+    if not currentTarget then return end
+    local info = getWhaleInfo(currentTarget)
+    if not info then return end
+
+    local myPos = hrp.Position
+    local center = info.center
+    local horiz = Vector3.new(myPos.X - center.X, 0, myPos.Z - center.Z)
+
+    -- Nếu player đang ở ngay trên tâm whale → chọn hướng mặc định (Bắc)
+    if horiz.Magnitude < 10 then
+        horiz = Vector3.new(1, 0, 0)
+    end
+    local horizUnit = horiz.Unit
+
+    local standRadius = info.radius + STAND_DISTANCE
+    local standXZ = Vector3.new(center.X, 0, center.Z) + horizUnit * standRadius
+    local standY  = center.Y + HOVER_Y
+
+    frozenStandPos = Vector3.new(standXZ.X, standY, standXZ.Z)
+    frozenStandRadius = standRadius
+    print(string.format("[AutoWhale] Đóng băng điểm đứng: (%.0f, %.0f, %.0f) | radius: %.0f",
+        frozenStandPos.X, frozenStandPos.Y, frozenStandPos.Z, standRadius))
+end
+
 local function scanFolder(force)
     local now = tick()
     if not force and now - lastScan < SCAN_INTERVAL then return end
     lastScan = now
+
     local newTarget = findNearestWhale()
     if newTarget and newTarget ~= currentTarget then
         currentTarget = newTarget
+        frozenStandPos = nil
+        frozenStandRadius = nil
         refreshRayFilter()
+        freezeStandPos()  -- ⭐ tính 1 lần
     elseif not newTarget then
         currentTarget = nil
+        frozenStandPos = nil
+        frozenStandRadius = nil
     end
 end
 
 WhaleFolder.ChildAdded:Connect(function(child)
     if child:IsA("Model") and ENABLED then
         currentTarget = child
+        frozenStandPos = nil
+        frozenStandRadius = nil
         refreshRayFilter()
+        freezeStandPos()
     end
 end)
 
@@ -205,7 +230,7 @@ local function createUI()
     title.Size = UDim2.new(1, 0, 0, 25)
     title.Position = UDim2.new(0, 0, 0, 4)
     title.BackgroundTransparency = 1
-    title.Text = "🐋 AUTO WHALE v9"
+    title.Text = "🐋 AUTO WHALE v10"
     title.Font = Enum.Font.GothamBold
     title.TextSize = 13
     title.TextColor3 = Color3.fromRGB(240, 240, 240)
@@ -267,23 +292,26 @@ RunService.Heartbeat:Connect(function(dt)
     scanFolder(false)
     if not currentTarget or not currentTarget.Parent then
         currentTarget = nil
+        frozenStandPos = nil
         statusLabel.Text = "Trạng thái: chờ whale..."
         return
     end
 
-    local info = getWhaleInfo(currentTarget)
-    if not info then
-        statusLabel.Text = "Không lấy được info whale"
-        return
+    -- Nếu vì lý do gì đó chưa có điểm đứng → tính lại
+    if not frozenStandPos then
+        freezeStandPos()
+        if not frozenStandPos then
+            statusLabel.Text = "Không lấy được info whale"
+            return
+        end
     end
 
-    local myPos  = hrp.Position
-    local center = info.center
+    local myPos = hrp.Position
+    local standPos = frozenStandPos
 
     -- ============ STUCK DETECTION ============
     if lastPos then
         local moved = (myPos - lastPos).Magnitude
-        -- Nếu frame này di chuyển < 0.5 studs thì tính là kẹt
         if moved < 0.5 then
             stuckTimer = stuckTimer + dt
         else
@@ -292,7 +320,6 @@ RunService.Heartbeat:Connect(function(dt)
     end
     lastPos = myPos
 
-    -- Kẹt quá lâu → bật chế độ bay lên khẩn cấp
     if stuckTimer >= STUCK_TIME and forceRiseTimer <= 0 then
         forceRiseTimer = 1.5
         stuckTimer = 0
@@ -301,24 +328,12 @@ RunService.Heartbeat:Connect(function(dt)
         forceRiseTimer = forceRiseTimer - dt
     end
 
-    -- ============ TÍNH ĐIỂM ĐỨNG ============
-    local horiz = Vector3.new(myPos.X - center.X, 0, myPos.Z - center.Z)
-    if horiz.Magnitude < 0.1 then horiz = Vector3.new(1, 0, 0) end
-    local horizUnit = horiz.Unit
-
-    local standRadius = info.radius + STAND_DISTANCE
-    local standXZ     = Vector3.new(center.X, 0, center.Z) + horizUnit * standRadius
-    local standY      = center.Y + HOVER_Y
-    local standPos    = Vector3.new(standXZ.X, standY, standXZ.Z)
-
-    local distToCenter = horiz.Magnitude
-    local distToStand  = (standPos - myPos).Magnitude
-    local edgeDist     = distToCenter - info.radius
+    -- ============ KHOẢNG CÁCH ============
+    local distToStand = (standPos - myPos).Magnitude
 
     -- ============ STOP ============
-    if math.abs(distToCenter - standRadius) <= STOP_XZ_TOL
-       and math.abs(myPos.Y - standY) <= 8 then
-        statusLabel.Text = string.format("✅ ĐÃ ĐỨNG (cách mép:%.0f)", edgeDist)
+    if distToStand <= STOP_TOL then
+        statusLabel.Text = string.format("✅ ĐÃ ĐỨNG | còn:%.0f", distToStand)
         return
     end
 
@@ -326,25 +341,30 @@ RunService.Heartbeat:Connect(function(dt)
     local moveTarget = standPos
     local phaseText  = "fly"
 
-    -- Force rise nếu đang kẹt
+    -- Tính edgeDist (tới whale) để quyết định có được phép bay lên
+    local info = getWhaleInfo(currentTarget)
+    local edgeDist = 9999
+    if info then
+        edgeDist = (Vector3.new(myPos.X, 0, myPos.Z) - Vector3.new(info.center.X, 0, info.center.Z)).Magnitude - info.radius
+    end
+
     if forceRiseTimer > 0 then
         phaseText = "rise-stuck"
         moveTarget = Vector3.new(myPos.X, myPos.Y + 30, myPos.Z)
-    -- Chỉ xét rise nếu còn xa whale
     elseif edgeDist > NO_RISE_DIST then
         local dirToStand = standPos - myPos
         local flat = Vector3.new(dirToStand.X, 0, dirToStand.Z)
         local len  = math.min(flat.Magnitude, RAY_LENGTH)
-        if len > 0.1 then
-            if rayBlocked(myPos, flat.Unit, len) then
-                local safeY = math.max(center.Y + SAFE_HEIGHT, HIGH_Y_MIN)
-                if myPos.Y < safeY - 10 then
-                    phaseText = "rise"
-                    moveTarget = Vector3.new(myPos.X, safeY, myPos.Z)
-                else
-                    phaseText = "fly-high"
-                    moveTarget = Vector3.new(standXZ.X, safeY, standXZ.Z)
-                end
+        if len > 0.1 and rayBlocked(myPos, flat.Unit, len) then
+            local info2 = getWhaleInfo(currentTarget)
+            local cy = info2 and info2.center.Y or 0
+            local safeY = math.max(cy + SAFE_HEIGHT, HIGH_Y_MIN)
+            if myPos.Y < safeY - 10 then
+                phaseText = "rise"
+                moveTarget = Vector3.new(myPos.X, safeY, myPos.Z)
+            else
+                phaseText = "fly-high"
+                moveTarget = Vector3.new(standPos.X, safeY, standPos.Z)
             end
         end
     end
@@ -352,10 +372,7 @@ RunService.Heartbeat:Connect(function(dt)
     -- ============ DI CHUYỂN ============
     local diff     = moveTarget - myPos
     local distance = diff.Magnitude
-    if distance < 0.5 then
-        statusLabel.Text = string.format("%s | đã tới điểm phụ", phaseText)
-        return
-    end
+    if distance < 0.5 then return end
 
     local dir  = diff.Unit
     local step = math.min(SPEED * dt, distance)
@@ -369,8 +386,8 @@ RunService.Heartbeat:Connect(function(dt)
     sendDash(newCF)
 
     statusLabel.Text = string.format(
-        "%s | mép:%.0f | Y:%.0f | stk:%.1f",
-        phaseText, edgeDist, myPos.Y - standY, stuckTimer)
+        "%s | còn:%.0f | stk:%.1f",
+        phaseText, distToStand, stuckTimer)
 end)
 
-print("[AutoWhale v9] Loaded — cap radius + stuck detection")
+print("[AutoWhale v10] Loaded — điểm đứng cố định")
