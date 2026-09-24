@@ -1,11 +1,10 @@
 -- ============================================
--- AUTO WHALE + DODGE + UI TOGGLE
+-- AUTO WHALE v2 — DODGE THÔNG MINH
 -- ============================================
 
 local Players           = game:GetService("Players")
 local RunService        = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local UIS               = game:GetService("UserInputService")
 
 local LP   = Players.LocalPlayer
 local char = LP.Character or LP.CharacterAdded:Wait()
@@ -16,16 +15,25 @@ local Remote      = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Inpu
 local WhaleFolder = workspace:WaitForChild("Whale")
 
 -- ============ CONFIG ============
-local SPEED          = 200
-local STOP_DISTANCE  = 50
-local SCAN_INTERVAL  = 0.5
-local RAY_LENGTH     = 12
-local IGNORE_TAGS    = { "Whale" }
+local SPEED           = 200
+local STOP_DISTANCE   = 50
+local SCAN_INTERVAL   = 0.5
+local RAY_LENGTH      = 40      -- tăng từ 12 -> 40
+local RAY_SIDE_LENGTH = 25
+local IGNORE_TAGS     = { "Whale" }
+
+-- Stuck detection
+local STUCK_TIME      = 0.8     -- bị kẹt 0.8s thì xử lý
+local STUCK_MOVE_MIN  = 5       -- di chuyển < 5 studs/0.8s => kẹt
 
 -- ============ STATE ============
 local ENABLED = false
 local currentTarget = nil
 local lastScan      = 0
+local lastPos       = nil
+local stuckTimer    = 0
+local dodgeBias     = 0    -- hướng né ưu tiên: 0 = ko, 1 = phải, -1 = trái
+local verticalBoost = 0    -- thời gian bay chếch lên
 
 -- ============ HELPER ============
 local function getModelPosition(model)
@@ -93,29 +101,68 @@ WhaleFolder.ChildAdded:Connect(function(child)
 end)
 
 -- ============ DODGE ============
-local function rayHits(origin, dir, length)
+local function rayBlocked(origin, dir, length)
     return workspace:Raycast(origin, dir * length, rayParams) ~= nil
 end
 
-local function computeAvoidedDirection(origin, desiredDir)
-    if not rayHits(origin, desiredDir, RAY_LENGTH) then return desiredDir end
+-- Kiểm tra đường có thông không (bắn nhiều tia song song)
+local function pathClear(origin, dir, length)
+    -- tia trung tâm
+    if rayBlocked(origin, dir, length) then return false end
+    -- tia 2 bên (offset vuông góc) để phát hiện tường hẹp
+    local right = dir:Cross(Vector3.new(0,1,0))
+    if right.Magnitude < 0.01 then right = Vector3.new(1,0,0) else right = right.Unit end
+    local offset = right * 3
+    if rayBlocked(origin + offset, dir, length) then return false end
+    if rayBlocked(origin - offset, dir, length) then return false end
+    return true
+end
 
-    local up = Vector3.new(0, 1, 0)
-    local right = desiredDir:Cross(up)
-    right = right.Magnitude < 0.01 and Vector3.new(1,0,0) or right.Unit
+-- Tìm hướng đi tốt nhất, ưu tiên: thẳng > chếch nhẹ > chếch mạnh > chếch lên
+local function findBestDirection(origin, desiredDir)
+    -- 1. Kiểm tra thẳng
+    if pathClear(origin, desiredDir, RAY_LENGTH) then
+        dodgeBias = 0
+        return desiredDir
+    end
 
-    for _, angleDeg in ipairs({ 30, 45, 60, 90, 120 }) do
-        for _, sign in ipairs({ 1, -1 }) do
+    local right = desiredDir:Cross(Vector3.new(0,1,0))
+    if right.Magnitude < 0.01 then right = Vector3.new(1,0,0) else right = right.Unit end
+
+    -- 2. Thử các góc ngang, ưu tiên hướng đã né thành công (dodgeBias)
+    local angles = { 30, 45, 60, 90, 120, 150 }
+    local order = dodgeBias >= 0 and { 1, -1 } or { -1, 1 }
+
+    for _, angleDeg in ipairs(angles) do
+        for _, sign in ipairs(order) do
             local rot = (CFrame.Angles(0, math.rad(angleDeg) * sign, 0) * desiredDir).Unit
-            if not rayHits(origin + rot, rot, RAY_LENGTH) then
+            if pathClear(origin, rot, RAY_SIDE_LENGTH) then
+                dodgeBias = sign
                 return rot
             end
         end
     end
-    return desiredDir
+
+    -- 3. Thử chếch LÊN (bay qua tường thấp)
+    for _, upDeg in ipairs({ 30, 45, 60, 75 }) do
+        for _, sign in ipairs(order) do
+            local yaw = CFrame.Angles(0, math.rad(30) * sign, 0)
+            local pitch = CFrame.Angles(math.rad(upDeg), 0, 0)
+            local dir = (yaw * pitch * desiredDir).Unit
+            if pathClear(origin, dir, RAY_SIDE_LENGTH) then
+                dodgeBias = sign
+                verticalBoost = 0.4
+                return dir
+            end
+        end
+    end
+
+    -- 4. Bó tay — bay chéo lên 60° + nghiêng ngang
+    verticalBoost = 0.4
+    return (CFrame.Angles(math.rad(60), math.rad(45 * (dodgeBias or 1)), 0) * desiredDir).Unit
 end
 
--- ============ ON / OFF ============
+-- ============ ON/OFF ============
 local function setEnabled(state)
     ENABLED = state
     local c = LP.Character
@@ -133,6 +180,8 @@ local function setEnabled(state)
             r.AssemblyAngularVelocity = Vector3.zero
         end
     end
+    stuckTimer = 0
+    lastPos = nil
 end
 
 -- ============ UI ============
@@ -144,7 +193,6 @@ local function createUI()
     gui.Parent = LP:WaitForChild("PlayerGui")
 
     local frame = Instance.new("Frame")
-    frame.Name = "Main"
     frame.Size = UDim2.new(0, 180, 0, 60)
     frame.Position = UDim2.new(0, 20, 0, 100)
     frame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
@@ -153,27 +201,21 @@ local function createUI()
     frame.Draggable = true
     frame.Parent = gui
 
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 10)
-    corner.Parent = frame
-
-    local stroke = Instance.new("UIStroke")
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
+    local stroke = Instance.new("UIStroke", frame)
     stroke.Color = Color3.fromRGB(60, 60, 70)
     stroke.Thickness = 1.5
-    stroke.Parent = frame
 
-    local title = Instance.new("TextLabel")
+    local title = Instance.new("TextLabel", frame)
     title.Size = UDim2.new(1, 0, 0, 25)
     title.Position = UDim2.new(0, 0, 0, 4)
     title.BackgroundTransparency = 1
-    title.Text = "🐋 AUTO WHALE"
+    title.Text = "🐋 AUTO WHALE v2"
     title.Font = Enum.Font.GothamBold
     title.TextSize = 13
     title.TextColor3 = Color3.fromRGB(240, 240, 240)
-    title.Parent = frame
 
-    local btn = Instance.new("TextButton")
-    btn.Name = "ToggleBtn"
+    local btn = Instance.new("TextButton", frame)
     btn.Size = UDim2.new(1, -20, 0, 26)
     btn.Position = UDim2.new(0, 10, 0, 30)
     btn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
@@ -182,11 +224,7 @@ local function createUI()
     btn.Font = Enum.Font.GothamBold
     btn.TextSize = 14
     btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    btn.Parent = frame
-
-    local btnCorner = Instance.new("UICorner")
-    btnCorner.CornerRadius = UDim.new(0, 6)
-    btnCorner.Parent = btn
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
 
     btn.MouseButton1Click:Connect(function()
         setEnabled(not ENABLED)
@@ -217,6 +255,7 @@ RunService.Heartbeat:Connect(function(dt)
             hum.WalkSpeed = 0
         end
         refreshRayFilter()
+        lastPos = nil
         return
     end
 
@@ -235,12 +274,41 @@ RunService.Heartbeat:Connect(function(dt)
     local diff     = targetPos - myPos
     local distance = diff.Magnitude
 
+    -- ============ STUCK DETECTION ============
+    if lastPos then
+        local moved = (myPos - lastPos).Magnitude
+        if moved < STUCK_MOVE_MIN * dt / 0.8 then
+            stuckTimer = stuckTimer + dt
+        else
+            stuckTimer = math.max(0, stuckTimer - dt * 2)
+        end
+    end
+    lastPos = myPos
+
+    -- Bị kẹt lâu -> đổi hướng ưu tiên + boost lên
+    if stuckTimer >= STUCK_TIME then
+        dodgeBias = -dodgeBias
+        if dodgeBias == 0 then dodgeBias = 1 end
+        verticalBoost = 0.6
+        stuckTimer = 0
+    end
+
     if distance <= STOP_DISTANCE then return end
 
-    local moveDir  = computeAvoidedDirection(myPos, diff.Unit)
-    local step     = math.min(SPEED * dt, distance - STOP_DISTANCE)
-    local newPos   = myPos + moveDir * step
-    local newCF    = CFrame.new(newPos) * (hrp.CFrame - hrp.CFrame.Position)
+    -- ============ TÍNH HƯỚNG ============
+    local desiredDir = diff.Unit
+    local moveDir = findBestDirection(myPos, desiredDir)
+
+    -- Áp dụng vertical boost (bay lên khi cần)
+    if verticalBoost > 0 then
+        moveDir = (moveDir + Vector3.new(0, 0.6, 0)).Unit
+        verticalBoost = verticalBoost - dt
+        if verticalBoost < 0 then verticalBoost = 0 end
+    end
+
+    local step   = math.min(SPEED * dt, distance - STOP_DISTANCE)
+    local newPos = myPos + moveDir * step
+    local newCF  = CFrame.new(newPos) * (hrp.CFrame - hrp.CFrame.Position)
 
     hrp.CFrame = newCF
     hrp.AssemblyLinearVelocity  = Vector3.zero
@@ -249,4 +317,4 @@ RunService.Heartbeat:Connect(function(dt)
     sendDash(newCF)
 end)
 
-print("[AutoWhale] UI đã load — kéo để di chuyển, click OFF/ON để bật tắt")
+print("[AutoWhale v2] Loaded — click ON để bật")
