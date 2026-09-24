@@ -1,6 +1,5 @@
 -- ============================================
--- AUTO WHALE v3 — FLY-OVER-WALL
--- Bay lên trời vượt tường, không bị kẹt
+-- AUTO WHALE v4 — FIX HẠ XUỐNG
 -- ============================================
 
 local Players           = game:GetService("Players")
@@ -20,14 +19,16 @@ local SPEED          = 200
 local STOP_DISTANCE  = 50
 local SCAN_INTERVAL  = 0.5
 
-local SAFE_HEIGHT    = 80     -- cao hơn tường bao nhiêu studs (so với whale)
-local HIGH_Y_MIN     = 150    -- độ cao Y tối thiểu khi bay
-local H_ARRIVE_XZ    = 40     -- khi XZ cách whale < 40 studs thì bắt đầu hạ
+local SAFE_HEIGHT    = 60     -- giảm từ 80
+local HIGH_Y_MIN     = 120    -- giảm từ 150
+local H_ARRIVE_XZ    = 60     -- bắt đầu hạ sớm hơn (từ 40 -> 60)
+local DESCEND_SPEED  = 300    -- tốc độ hạ nhanh hơn bay ngang
 
 -- ============ STATE ============
 local ENABLED = false
 local currentTarget = nil
 local lastScan      = 0
+local phase         = "idle"  -- "rise" | "fly" | "descend" | "idle"
 
 -- ============ HELPER ============
 local function getModelPosition(model)
@@ -75,6 +76,7 @@ end)
 -- ============ ON/OFF ============
 local function setEnabled(state)
     ENABLED = state
+    phase = "idle"
     local c = LP.Character
     if c then
         local h = c:FindFirstChildOfClass("Humanoid")
@@ -100,7 +102,7 @@ local function createUI()
     gui.Parent = LP:WaitForChild("PlayerGui")
 
     local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0, 180, 0, 60)
+    frame.Size = UDim2.new(0, 200, 0, 85)
     frame.Position = UDim2.new(0, 20, 0, 100)
     frame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
     frame.BorderSizePixel = 0
@@ -116,14 +118,25 @@ local function createUI()
     title.Size = UDim2.new(1, 0, 0, 25)
     title.Position = UDim2.new(0, 0, 0, 4)
     title.BackgroundTransparency = 1
-    title.Text = "🐋 AUTO WHALE v3"
+    title.Text = "🐋 AUTO WHALE v4"
     title.Font = Enum.Font.GothamBold
     title.TextSize = 13
     title.TextColor3 = Color3.fromRGB(240, 240, 240)
 
+    local status = Instance.new("TextLabel", frame)
+    status.Name = "Status"
+    status.Size = UDim2.new(1, -20, 0, 14)
+    status.Position = UDim2.new(0, 10, 0, 28)
+    status.BackgroundTransparency = 1
+    status.Text = "Trạng thái: idle"
+    status.Font = Enum.Font.Gotham
+    status.TextSize = 11
+    status.TextColor3 = Color3.fromRGB(160, 160, 170)
+    status.TextXAlignment = Enum.TextXAlignment.Left
+
     local btn = Instance.new("TextButton", frame)
     btn.Size = UDim2.new(1, -20, 0, 26)
-    btn.Position = UDim2.new(0, 10, 0, 30)
+    btn.Position = UDim2.new(0, 10, 0, 48)
     btn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
     btn.BorderSizePixel = 0
     btn.Text = "OFF"
@@ -144,10 +157,10 @@ local function createUI()
         end
     end)
 
-    return gui
+    return gui, status
 end
 
-createUI()
+local ui, statusLabel = createUI()
 
 -- ============ MAIN LOOP ============
 RunService.Heartbeat:Connect(function(dt)
@@ -159,11 +172,16 @@ RunService.Heartbeat:Connect(function(dt)
         return
     end
 
-    if not ENABLED then return end
+    if not ENABLED then
+        statusLabel.Text = "Trạng thái: OFF"
+        return
+    end
 
     scanFolder(false)
     if not currentTarget or not currentTarget.Parent then
         currentTarget = nil
+        statusLabel.Text = "Trạng thái: chờ whale..."
+        phase = "idle"
         return
     end
 
@@ -172,36 +190,52 @@ RunService.Heartbeat:Connect(function(dt)
 
     local myPos = hrp.CFrame.Position
 
-    -- Tính vector tới whale
-    local flatTarget = Vector3.new(targetPos.X, myPos.Y, targetPos.Z)
-    local flatDist   = (flatTarget - myPos).Magnitude
-    local safeY      = math.max(targetPos.Y + SAFE_HEIGHT, HIGH_Y_MIN)
+    -- Vector & khoảng cách
+    local dY      = targetPos.Y - myPos.Y
+    local flatVec = Vector3.new(targetPos.X - myPos.X, 0, targetPos.Z - myPos.Z)
+    local flatDist = flatVec.Magnitude
+    local trueDist = (targetPos - myPos).Magnitude
 
-    local moveTarget
-    if myPos.Y < safeY - 5 then
-        -- GIAI ĐOẠN 1: bay thẳng lên tới safeY
-        moveTarget = Vector3.new(myPos.X, safeY, myPos.Z)
-    elseif flatDist > H_ARRIVE_XZ then
-        -- GIAI ĐOẠN 2: bay ngang trên cao tới whale (giữ safeY)
-        moveTarget = Vector3.new(targetPos.X, safeY, targetPos.Z)
-    else
-        -- GIAI ĐOẠN 3: hạ xuống whale
-        moveTarget = Vector3.new(targetPos.X, targetPos.Y + STOP_DISTANCE * 0.3, targetPos.Z)
+    -- Đã tới nơi
+    if trueDist <= STOP_DISTANCE then
+        statusLabel.Text = string.format("Trạng thái: ĐÃ TỚI (%.0f studs)", trueDist)
+        phase = "idle"
+        return
     end
 
+    -- ============ QUYẾT ĐỊNH GIAI ĐOẠN ============
+    local moveTarget
+    local speed = SPEED
+
+    -- Ưu tiên 1: XZ đã gần whale -> HẠ XUỐNG (hoặc bay lên nếu whale cao hơn)
+    if flatDist <= H_ARRIVE_XZ then
+        phase = "descend"
+        speed = DESCEND_SPEED
+        moveTarget = targetPos  -- bay thẳng tới whale
+    -- Ưu tiên 2: Còn xa XZ -> cần vượt tường, bay lên cao trước
+    else
+        local safeY = math.max(targetPos.Y + SAFE_HEIGHT, HIGH_Y_MIN)
+        if myPos.Y < safeY - 10 then
+            -- BAY LÊN
+            phase = "rise"
+            moveTarget = Vector3.new(myPos.X, safeY, myPos.Z)
+        else
+            -- BAY NGANG TRÊN CAO
+            phase = "fly"
+            moveTarget = Vector3.new(targetPos.X, safeY, targetPos.Z)
+        end
+    end
+
+    -- ============ DI CHUYỂN ============
     local diff     = moveTarget - myPos
     local distance = diff.Magnitude
 
-    -- Đến đủ gần whale (3D) thì dừng
-    local trueDistToWhale = (targetPos - myPos).Magnitude
-    if trueDistToWhale <= STOP_DISTANCE then
-        return
-    end
+    statusLabel.Text = string.format("Trạng thái: %s | XZ:%.0f | Y:%.0f", phase, flatDist, dY)
 
     if distance < 0.5 then return end
 
     local dir  = diff.Unit
-    local step = math.min(SPEED * dt, distance)
+    local step = math.min(speed * dt, distance)
     local newPos = myPos + dir * step
     local newCF  = CFrame.new(newPos) * (hrp.CFrame - hrp.CFrame.Position)
 
@@ -212,4 +246,4 @@ RunService.Heartbeat:Connect(function(dt)
     sendDash(newCF)
 end)
 
-print("[AutoWhale v3] Loaded — click ON để bật (Fly-over-wall mode)")
+print("[AutoWhale v4] Loaded — click ON để bật")
