@@ -1,5 +1,5 @@
 -- ============================================
--- AUTO WHALE v4 — FIX HẠ XUỐNG
+-- AUTO WHALE v5 — LAND ON TOP (không đâm vào whale)
 -- ============================================
 
 local Players           = game:GetService("Players")
@@ -15,39 +15,67 @@ local Remote      = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Inpu
 local WhaleFolder = workspace:WaitForChild("Whale")
 
 -- ============ CONFIG ============
-local SPEED          = 200
-local STOP_DISTANCE  = 50
-local SCAN_INTERVAL  = 0.5
+local SPEED           = 200
+local SCAN_INTERVAL   = 0.5
 
-local SAFE_HEIGHT    = 60     -- giảm từ 80
-local HIGH_Y_MIN     = 120    -- giảm từ 150
-local H_ARRIVE_XZ    = 60     -- bắt đầu hạ sớm hơn (từ 40 -> 60)
-local DESCEND_SPEED  = 300    -- tốc độ hạ nhanh hơn bay ngang
+local STOP_XZ         = 50    -- bán kính XZ dừng
+local STOP_HEIGHT     = 15    -- sai lệch Y tối đa so với đỉnh whale
+local HOVER_OFFSET    = 8     -- bay cao hơn đỉnh whale 8 studs (tránh đâm)
+
+local SAFE_HEIGHT     = 60    -- bay cao hơn đỉnh whale khi vượt tường
+local HIGH_Y_MIN      = 120
+local H_ARRIVE_XZ     = 80    -- XZ < 80 thì bắt đầu hạ
+local DESCEND_SPEED   = 350
+local SEND_INTERVAL   = 0.05  -- rate-limit gửi remote
 
 -- ============ STATE ============
 local ENABLED = false
 local currentTarget = nil
-local lastScan      = 0
-local phase         = "idle"  -- "rise" | "fly" | "descend" | "idle"
+local lastScan = 0
+local lastSend = 0
+local phase = "idle"
 
 -- ============ HELPER ============
-local function getModelPosition(model)
+-- Lấy thông tin whale: tâm + đỉnh + kích thước
+local function getWhaleInfo(model)
     if not model or not model.Parent then return nil end
-    if model.PrimaryPart then return model.PrimaryPart.Position end
+    local ok, cf, size = pcall(function()
+        local c, s = model:GetBoundingBox()
+        return c, s
+    end)
+    if ok and cf and size then
+        return {
+            center = cf.Position,
+            top    = cf.Position.Y + size.Y / 2,
+            size   = size
+        }
+    end
+    -- fallback nếu GetBoundingBox lỗi
     local part = model:FindFirstChildWhichIsA("BasePart", true)
-    return part and part.Position or nil
+    if not part then return nil end
+    return {
+        center = part.Position,
+        top    = part.Position.Y + part.Size.Y / 2,
+        size   = part.Size
+    }
 end
 
-local function sendDash(cf) Remote:FireServer("Dash", cf) end
+local function sendDash(cf)
+    local now = tick()
+    if now - lastSend >= SEND_INTERVAL then
+        Remote:FireServer("Dash", cf)
+        lastSend = now
+    end
+end
 
 local function findNearestWhale()
     local myPos = hrp.Position
     local best, bestDist = nil, math.huge
     for _, model in ipairs(WhaleFolder:GetChildren()) do
         if model:IsA("Model") then
-            local pos = getModelPosition(model)
-            if pos then
-                local d = (pos - myPos).Magnitude
+            local info = getWhaleInfo(model)
+            if info then
+                local d = (info.center - myPos).Magnitude
                 if d < bestDist then best, bestDist = model, d end
             end
         end
@@ -118,13 +146,12 @@ local function createUI()
     title.Size = UDim2.new(1, 0, 0, 25)
     title.Position = UDim2.new(0, 0, 0, 4)
     title.BackgroundTransparency = 1
-    title.Text = "🐋 AUTO WHALE v4"
+    title.Text = "🐋 AUTO WHALE v5"
     title.Font = Enum.Font.GothamBold
     title.TextSize = 13
     title.TextColor3 = Color3.fromRGB(240, 240, 240)
 
     local status = Instance.new("TextLabel", frame)
-    status.Name = "Status"
     status.Size = UDim2.new(1, -20, 0, 14)
     status.Position = UDim2.new(0, 10, 0, 28)
     status.BackgroundTransparency = 1
@@ -181,56 +208,59 @@ RunService.Heartbeat:Connect(function(dt)
     if not currentTarget or not currentTarget.Parent then
         currentTarget = nil
         statusLabel.Text = "Trạng thái: chờ whale..."
-        phase = "idle"
         return
     end
 
-    local targetPos = getModelPosition(currentTarget)
-    if not targetPos then return end
+    local info = getWhaleInfo(currentTarget)
+    if not info then return end
 
-    local myPos = hrp.CFrame.Position
+    local myPos    = hrp.Position
+    local whaleTop = info.top
+    local targetY  = whaleTop + HOVER_OFFSET    -- điểm hạ cánh = trên đỉnh whale
 
-    -- Vector & khoảng cách
-    local dY      = targetPos.Y - myPos.Y
-    local flatVec = Vector3.new(targetPos.X - myPos.X, 0, targetPos.Z - myPos.Z)
-    local flatDist = flatVec.Magnitude
-    local trueDist = (targetPos - myPos).Magnitude
+    -- Khoảng cách XZ (không tính Y)
+    local dxz = Vector3.new(info.center.X - myPos.X, 0, info.center.Z - myPos.Z)
+    local flatDist = dxz.Magnitude
 
-    -- Đã tới nơi
-    if trueDist <= STOP_DISTANCE then
-        statusLabel.Text = string.format("Trạng thái: ĐÃ TỚI (%.0f studs)", trueDist)
-        phase = "idle"
+    -- Khoảng cách Y tới điểm hạ cánh
+    local dy = myPos.Y - targetY
+
+    -- ============ STOP CONDITION ============
+    -- Đã ở trên đầu whale và ngang tầm đỉnh
+    if flatDist <= STOP_XZ and math.abs(dy) <= STOP_HEIGHT then
+        statusLabel.Text = string.format("✅ ĐÃ TỚI (XZ:%.0f | Y:%.0f)", flatDist, dy)
         return
     end
 
-    -- ============ QUYẾT ĐỊNH GIAI ĐOẠN ============
-    local moveTarget
-    local speed = SPEED
+    -- ============ QUYẾT ĐỊNH HƯỚNG ============
+    local moveTarget, speed
 
-    -- Ưu tiên 1: XZ đã gần whale -> HẠ XUỐNG (hoặc bay lên nếu whale cao hơn)
-    if flatDist <= H_ARRIVE_XZ then
-        phase = "descend"
-        speed = DESCEND_SPEED
-        moveTarget = targetPos  -- bay thẳng tới whale
-    -- Ưu tiên 2: Còn xa XZ -> cần vượt tường, bay lên cao trước
-    else
-        local safeY = math.max(targetPos.Y + SAFE_HEIGHT, HIGH_Y_MIN)
+    if flatDist > H_ARRIVE_XZ then
+        -- CÒN XA: bay cao vượt tường
+        local safeY = math.max(whaleTop + SAFE_HEIGHT, HIGH_Y_MIN)
         if myPos.Y < safeY - 10 then
             -- BAY LÊN
             phase = "rise"
+            speed = SPEED
             moveTarget = Vector3.new(myPos.X, safeY, myPos.Z)
         else
             -- BAY NGANG TRÊN CAO
             phase = "fly"
-            moveTarget = Vector3.new(targetPos.X, safeY, targetPos.Z)
+            speed = SPEED
+            moveTarget = Vector3.new(info.center.X, safeY, info.center.Z)
         end
+    else
+        -- ĐÃ GẦN XZ: HẠ XUỐNG TỚI ĐỈNH WHALE
+        phase = "descend"
+        speed = DESCEND_SPEED
+        moveTarget = Vector3.new(info.center.X, targetY, info.center.Z)
     end
+
+    statusLabel.Text = string.format("%s | XZ:%.0f | Y:%.0f", phase, flatDist, dy)
 
     -- ============ DI CHUYỂN ============
     local diff     = moveTarget - myPos
     local distance = diff.Magnitude
-
-    statusLabel.Text = string.format("Trạng thái: %s | XZ:%.0f | Y:%.0f", phase, flatDist, dY)
 
     if distance < 0.5 then return end
 
@@ -246,4 +276,4 @@ RunService.Heartbeat:Connect(function(dt)
     sendDash(newCF)
 end)
 
-print("[AutoWhale v4] Loaded — click ON để bật")
+print("[AutoWhale v5] Loaded — click ON để bật")
