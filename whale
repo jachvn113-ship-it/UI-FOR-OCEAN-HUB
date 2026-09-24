@@ -18,7 +18,7 @@ local WhaleFolder = workspace:WaitForChild("Whale")
 local SPEED            = 200
 local SCAN_INTERVAL    = 0.5
 
-local STAND_DISTANCE   = 140    -- ⭐ ĐỨNG CÁCH WHALE 60 STUDS
+local STAND_DISTANCE   = 60   -- ⭐ ĐỨNG CÁCH WHALE 60 STUDS
 local HOVER_Y_OFFSET   = 5
 
 local SAFE_HEIGHT      = 60
