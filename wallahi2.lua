@@ -82,7 +82,12 @@ local function runAutoFarm()
 	if cdLabelF then
 		print("[CD] Hook F:", cdLabelF:GetFullName())
 	else
-		warn("[CD] Không tìm thấy CD label F -> spam F liên tục")
+		warn("[CD] Không tìm thấy CD label F")
+	end
+	if cdLabelV then
+		print("[CD] Hook V:", cdLabelV:GetFullName())
+	else
+		warn("[CD] Không tìm thấy CD label V -> spam V không check CD")
 	end
 
 	local function parseCooldown(text)
@@ -97,6 +102,7 @@ local function runAutoFarm()
 	end
 
 	local function isFReady() return isReady(cdLabelF) end
+	local function isVReady() return isReady(cdLabelV) end
 
 	-- ==========================================
 	-- EQUIP TOOL HELPER
@@ -170,7 +176,7 @@ local function runAutoFarm()
 	-- SAFE TWEEN
 	-- ==========================================
 	local function safeTween(hrp, targetCFrame, speed, useDashBypass)
-		local maxAttempts = 3   -- FIX: 5 -> 3 (ít bị kéo về nên không cần retry nhiều)
+		local maxAttempts = 3
 		local attempt = 0
 		while attempt < maxAttempts do
 			attempt = attempt + 1
@@ -257,9 +263,9 @@ local function runAutoFarm()
 	end
 
 	-- ==========================================
-	-- FIGHT ENEMY (ARAYA - spam ZXCFVB)
+	-- FIGHT ENEMY (ARAYA - spam Z X C F V, BỎ B)
 	-- ==========================================
-	local FIGHT_TIMEOUT = 35   -- FIX: 25 -> 35 (tween 100 chậm hơn, cần thêm thời gian)
+	local FIGHT_TIMEOUT = 35
 
 	local function fightEnemy(target, myHrp)
 		print("[FIGHT] Đánh:", target.Name)
@@ -271,7 +277,6 @@ local function runAutoFarm()
 
 		local enemyHrp = target:FindFirstChild("HumanoidRootPart")
 		if not enemyHrp then return end
-		-- Tween tốc độ 100 (giảm từ 300 để tránh rubberband)
 		safeTween(myHrp, enemyHrp.CFrame * CFrame.new(0, 0, 5), 100, true)
 
 		local fightStart = tick()
@@ -294,12 +299,12 @@ local function runAutoFarm()
 
 				if t then
 					local pos = currentEnemyHrp.Position
+					-- FIX: Bỏ B, chỉ spam Z X C F V
 					pcall(function() remote:FireServer("Tool", t, "Z", pos) end)
 					pcall(function() remote:FireServer("Tool", t, "X", pos) end)
 					pcall(function() remote:FireServer("Tool", t, "C", pos) end)
 					pcall(function() remote:FireServer("Tool", t, "F", pos) end)
 					pcall(function() remote:FireServer("Tool", t, "V", pos) end)
-					pcall(function() remote:FireServer("Tool", t, "B", pos) end)
 				end
 			end
 			task.wait(0.05)
@@ -308,14 +313,15 @@ local function runAutoFarm()
 	end
 
 	-- ==========================================
-	-- PROCESS SEAL (The World - F freeze + Prompt 1s/lần)
+	-- PROCESS SEAL (The World - spam V để spawn mob + prompt)
 	-- ==========================================
 	local SEAL_TIMEOUT         = 20
 	local MAX_RETRY            = 5
 	local PROMPT_SPAM_RATE     = 1
 	local PROMPT_CACHE_REFRESH = 2
-	local SEAL_TWEEN_SPEED     = 100   -- FIX: 80 -> 100 (đồng bộ với tốc độ đánh mob)
-	local PROMPT_RADIUS        = 60
+	local SEAL_TWEEN_SPEED     = 100
+	local PROMPT_RADIUS        = 120   -- FIX: 60 -> 120 (mở rộng bán kính prompt)
+	local V_SPAM_RATE          = 0.15  -- FIX: spam V liên tục, không đợi 1s
 
 	local function processSeal(sealNum, myHrp)
 		print("[SEAL] >>> Bắt đầu processSeal:", sealNum)
@@ -396,33 +402,48 @@ local function runAutoFarm()
 			retryCount = retryCount + 1
 			print(string.format("=== [SEAL %d] Lần %d/%d ===", sealNum, retryCount, MAX_RETRY))
 
-			-- BƯỚC 1: Cast F (freeze time) — chờ CD nếu cần
-			local fWaitStart = tick()
-			while not isFReady() and tick() - fWaitStart < 5 do
-				task.wait(0.1)
-			end
-
-			local t = player.Character and player.Character:FindFirstChild("The World")
-			if not t then t = equipTool("The World") end
-			if t then
-				local ok = pcall(function()
-					remote:FireServer("Tool", t, "F", vCoord)
-				end)
-				print("[SEAL] Cast F:", ok and "OK" or "FAIL")
-			else
-				warn("[SEAL] ❌ Mất The World trước khi cast F!")
-			end
-			task.wait(0.2)
-
-			-- BƯỚC 2: Spam ProximityPrompt (gần seal) 1s/lần
-			-- FIX: thêm check getTarget() ngay trong loop -> dừng tức thì khi mob xuất hiện
 			local stopSpam = false
 			local promptFireCount = 0
+			local vFireCount = 0
 
-			local spamThread = task.spawn(function()
+			-- ==========================================
+			-- THREAD 1: Spam V để mở seal spawn mob
+			-- (chạy liên tục khi V ready, không đợi 1s)
+			-- ==========================================
+			local vThread = task.spawn(function()
+				local lastVFire = -999
+				while not stopSpam do
+					-- Dừng ngay khi mob xuất hiện
+					if getTarget() then
+						print("[V] Mob xuất hiện -> dừng spam V!")
+						break
+					end
+
+					local now = tick()
+					local vReady = isVReady() and (now - lastVFire >= V_SPAM_RATE)
+
+					if vReady then
+						local t = player.Character and player.Character:FindFirstChild("The World")
+						if not t then t = equipTool("The World") end
+						if t then
+							pcall(function()
+								remote:FireServer("Tool", t, "V", vCoord)
+								vFireCount = vFireCount + 1
+							end)
+						end
+						lastVFire = now
+					end
+					task.wait(0.05)
+				end
+			end)
+
+			-- ==========================================
+			-- THREAD 2: Spam ProximityPrompt 1s/lần
+			-- ==========================================
+			local promptThread = task.spawn(function()
 				refreshPrompts()
 				while not stopSpam do
-					-- FIX: dừng ngay khi mob xuất hiện
+					-- Dừng ngay khi mob xuất hiện
 					if getTarget() then
 						print("[PROMPT] Mob xuất hiện -> dừng spam prompt!")
 						break
@@ -432,6 +453,7 @@ local function runAutoFarm()
 						refreshPrompts()
 					end
 
+					local fired = false
 					for i = 1, #promptCache do
 						local prompt = promptCache[i]
 						if prompt and prompt.Parent and prompt.Enabled then
@@ -449,6 +471,7 @@ local function runAutoFarm()
 									fireproximityprompt(prompt)
 									promptFireCount = promptFireCount + 1
 								end)
+								fired = true
 							end
 						end
 					end
@@ -456,7 +479,9 @@ local function runAutoFarm()
 				end
 			end)
 
+			-- ==========================================
 			-- CHỜ BOSS SPAWN HOẶC SEAL BIẾN MẤT
+			-- ==========================================
 			local waitStart = tick()
 			while tick() - waitStart < SEAL_TIMEOUT do
 				if not sealObj or not sealObj.Parent then
@@ -473,15 +498,16 @@ local function runAutoFarm()
 			end
 
 			stopSpam = true
-			pcall(function() task.cancel(spamThread) end)
+			pcall(function() task.cancel(vThread) end)
+			pcall(function() task.cancel(promptThread) end)
 			task.wait(0.05)
 
 			if bossSpawned then
-				print(string.format(">>> [SEAL %d] Xong sau %d lần (Prompt:%d)",
-					sealNum, retryCount, promptFireCount))
+				print(string.format(">>> [SEAL %d] Xong sau %d lần (V:%d, Prompt:%d)",
+					sealNum, retryCount, vFireCount, promptFireCount))
 			else
-				warn(string.format("[SEAL %d] Timeout (Prompt:%d) -> Retry",
-					sealNum, retryCount, promptFireCount))
+				warn(string.format("[SEAL %d] Timeout (V:%d, Prompt:%d) -> Retry",
+					sealNum, retryCount, vFireCount, promptFireCount))
 			end
 		end
 
@@ -529,7 +555,7 @@ if game.PlaceId == ENTRY_PLACE_ID then
 	runEntrySequence()
 
 elseif game.PlaceId == FARM_PLACE_ID then
-	print("[DISPATCH] Place Farm -> Auto Farm (Araya + The World F + Prompt)...")
+	print("[DISPATCH] Place Farm -> Auto Farm (Araya + The World V + Prompt)...")
 	task.wait(2)
 	runAutoFarm()
 
