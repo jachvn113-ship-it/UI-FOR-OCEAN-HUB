@@ -144,13 +144,12 @@ local function runAutoFarm()
 
 	local SEAL_TIMEOUT = 30
 	local MAX_RETRY = 5
-	local PROMPT_SPAM_RATE = 0.005
+	local PROMPT_SPAM_RATE = 1.0        -- FIX: 0.005 -> 1.0 (prompt chỉ fire mỗi 1 giây)
 	local PROMPT_CACHE_REFRESH = 2
 	local SEAL_TWEEN_SPEED = 80
 	local V_CAST_DELAY = 0.75
 	local V_REFIRE_GUARD = 2.0
-	local MIN_SPAWN_DURATION = 8
-	local FIGHT_TIMEOUT = 35        -- FIX: 25 -> 35 (bay chậm hơn nên cần thêm thời gian)
+	local FIGHT_TIMEOUT = 35             -- FIX: 25 -> 35 (bay chậm hơn nên cần thêm thời gian)
 	local MAIN_TICK = 0.1
 
 	-- PHẦN 1: BẮT CHAT CHRONO SEAL
@@ -347,9 +346,18 @@ local function runAutoFarm()
 			local spawnStart = tick()
 			local lastVFireTime = -999
 
+			-- ==========================================
+			-- FIX: Prompt chỉ fire mỗi 1s + dừng khi có mob
+			-- ==========================================
 			task.spawn(function()
 				refreshPrompts()
 				while not stopAll do
+					-- DỪNG NGAY khi có mob trong folder Enemies
+					if getTarget() then
+						print("[PROMPT] Mob đã xuất hiện -> dừng spam prompt!")
+						break
+					end
+
 					if tick() - lastPromptRefresh > PROMPT_CACHE_REFRESH then
 						refreshPrompts()
 					end
@@ -358,6 +366,7 @@ local function runAutoFarm()
 					local vCanFire = isVReady() and (now - lastVFireTime >= V_REFIRE_GUARD)
 
 					if vCanFire then
+						-- V ready -> cast V (đóng băng thời gian)
 						pcall(function()
 							remote:FireServer("Tool", tool, "V", vCoord)
 							vFireCount = vFireCount + 1
@@ -365,6 +374,7 @@ local function runAutoFarm()
 						lastVFireTime = now
 						task.wait(V_CAST_DELAY)
 					else
+						-- V cooldown -> fire 1 prompt, rồi chờ 1s
 						for i = 1, #promptCache do
 							local v = promptCache[i]
 							if v and v.Parent and v.Enabled then
@@ -375,11 +385,12 @@ local function runAutoFarm()
 								break
 							end
 						end
-						task.wait(PROMPT_SPAM_RATE)
+						task.wait(PROMPT_SPAM_RATE)   -- = 1.0s
 					end
 				end
 			end)
 
+			-- CHỜ BOSS/MOB SPAWN
 			local waitStart = tick()
 			while tick() - waitStart < SEAL_TIMEOUT do
 				if not sealObj or not sealObj.Parent then
@@ -388,13 +399,14 @@ local function runAutoFarm()
 					break
 				end
 
-				if getTarget() and (tick() - spawnStart) >= MIN_SPAWN_DURATION then
-					print(string.format("[DEBUG] Đã spawn đủ %.1fs, thoát sang fight!", MIN_SPAWN_DURATION))
+				-- FIX: check mob NGAY, không đợi MIN_SPAWN_DURATION
+				if getTarget() then
+					print("[DEBUG] Mob đã spawn -> thoát sang fight!")
 					bossSpawned = true
 					break
 				end
 
-				task.wait(0.5)
+				task.wait(0.2)
 			end
 
 			stopAll = true
