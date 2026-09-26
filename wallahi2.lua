@@ -170,7 +170,7 @@ local function runAutoFarm()
 	-- SAFE TWEEN
 	-- ==========================================
 	local function safeTween(hrp, targetCFrame, speed, useDashBypass)
-		local maxAttempts = 5
+		local maxAttempts = 3   -- FIX: 5 -> 3 (ít bị kéo về nên không cần retry nhiều)
 		local attempt = 0
 		while attempt < maxAttempts do
 			attempt = attempt + 1
@@ -259,7 +259,7 @@ local function runAutoFarm()
 	-- ==========================================
 	-- FIGHT ENEMY (ARAYA - spam ZXCFVB)
 	-- ==========================================
-	local FIGHT_TIMEOUT = 25
+	local FIGHT_TIMEOUT = 35   -- FIX: 25 -> 35 (tween 100 chậm hơn, cần thêm thời gian)
 
 	local function fightEnemy(target, myHrp)
 		print("[FIGHT] Đánh:", target.Name)
@@ -271,7 +271,8 @@ local function runAutoFarm()
 
 		local enemyHrp = target:FindFirstChild("HumanoidRootPart")
 		if not enemyHrp then return end
-		safeTween(myHrp, enemyHrp.CFrame * CFrame.new(0, 0, 5), 300, true)
+		-- Tween tốc độ 100 (giảm từ 300 để tránh rubberband)
+		safeTween(myHrp, enemyHrp.CFrame * CFrame.new(0, 0, 5), 100, true)
 
 		local fightStart = tick()
 		while target and target.Parent
@@ -307,14 +308,14 @@ local function runAutoFarm()
 	end
 
 	-- ==========================================
-	-- PROCESS SEAL (The World - F freeze + spam Prompt)
+	-- PROCESS SEAL (The World - F freeze + Prompt 1s/lần)
 	-- ==========================================
 	local SEAL_TIMEOUT         = 20
 	local MAX_RETRY            = 5
-	local PROMPT_SPAM_RATE     = 0.005
+	local PROMPT_SPAM_RATE     = 1
 	local PROMPT_CACHE_REFRESH = 2
-	local SEAL_TWEEN_SPEED     = 80
-	local PROMPT_RADIUS        = 60  -- chỉ fire prompt gần seal
+	local SEAL_TWEEN_SPEED     = 100   -- FIX: 80 -> 100 (đồng bộ với tốc độ đánh mob)
+	local PROMPT_RADIUS        = 60
 
 	local function processSeal(sealNum, myHrp)
 		print("[SEAL] >>> Bắt đầu processSeal:", sealNum)
@@ -411,15 +412,22 @@ local function runAutoFarm()
 			else
 				warn("[SEAL] ❌ Mất The World trước khi cast F!")
 			end
-			task.wait(0.2)  -- chờ 1 nhịp cho F kích hoạt freeze
+			task.wait(0.2)
 
-			-- BƯỚC 2: Spam ProximityPrompt liên tục (gần seal)
+			-- BƯỚC 2: Spam ProximityPrompt (gần seal) 1s/lần
+			-- FIX: thêm check getTarget() ngay trong loop -> dừng tức thì khi mob xuất hiện
 			local stopSpam = false
 			local promptFireCount = 0
 
 			local spamThread = task.spawn(function()
 				refreshPrompts()
 				while not stopSpam do
+					-- FIX: dừng ngay khi mob xuất hiện
+					if getTarget() then
+						print("[PROMPT] Mob xuất hiện -> dừng spam prompt!")
+						break
+					end
+
 					if tick() - lastPromptRefresh > PROMPT_CACHE_REFRESH then
 						refreshPrompts()
 					end
@@ -473,7 +481,7 @@ local function runAutoFarm()
 					sealNum, retryCount, promptFireCount))
 			else
 				warn(string.format("[SEAL %d] Timeout (Prompt:%d) -> Retry",
-					sealNum, promptFireCount))
+					sealNum, retryCount, promptFireCount))
 			end
 		end
 
