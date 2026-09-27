@@ -1,5 +1,5 @@
 -- ============================================
--- AUTO WHALE v6.1 — STOP 60 STUDS AWAY
+-- AUTO WHALE v6.2 — STOP 60 STUDS + AUTO RELEASE
 -- ============================================
 
 local Players           = game:GetService("Players")
@@ -18,20 +18,26 @@ local WhaleFolder = workspace:WaitForChild("Whale")
 local SPEED            = 200
 local SCAN_INTERVAL    = 0.5
 
-local STAND_DISTANCE   = 60    -- ⭐ ĐỨNG CÁCH WHALE 60 STUDS
+local STAND_DISTANCE   = 60    -- khoảng cách tối thiểu từ TÂM whale
+local EDGE_PADDING     = 10    -- ⭐ cách MÉP whale ít nhất bao nhiêu studs
 local HOVER_Y_OFFSET   = 5
 
 local SAFE_HEIGHT      = 60
 local HIGH_Y_MIN       = 120
-local H_ARRIVE_XZ      = 120   -- tăng theo (60 + 60 = 120)
+local H_ARRIVE_XZ      = 120
 local DESCEND_SPEED    = 350
 local SEND_INTERVAL    = 0.05
+
+local ARRIVE_TOLERANCE = 3     -- dung sai XZ khi coi là "đã tới"
+local ARRIVE_Y_TOL     = 8     -- dung sai Y khi coi là "đã tới"
 
 -- ============ STATE ============
 local ENABLED = false
 local currentTarget = nil
 local lastScan = 0
 local lastSend = 0
+local toggleBtn = nil
+local statusLabel = nil
 
 -- ============ XOÁ UI CŨ ============
 for _, g in ipairs(LP:WaitForChild("PlayerGui"):GetChildren()) do
@@ -41,15 +47,16 @@ for _, g in ipairs(LP:WaitForChild("PlayerGui"):GetChildren()) do
 end
 
 -- ============ HELPER ============
-local function getWhaleCenter(model)
-    if not model or not model.Parent then return nil end
-    local ok, cf = pcall(function()
-        local c = model:GetBoundingBox()
-        return c
+local function getWhaleCenterAndSize(model)
+    if not model or not model.Parent then return nil, nil end
+    local ok, cf, size = pcall(function()
+        local c, s = model:GetBoundingBox()
+        return c, s
     end)
-    if ok and cf then return cf.Position end
+    if ok and cf then return cf.Position, size end
     local part = model:FindFirstChildWhichIsA("BasePart", true)
-    return part and part.Position or nil
+    if part then return part.Position, part.Size end
+    return nil, nil
 end
 
 local function sendDash(cf)
@@ -65,7 +72,7 @@ local function findNearestWhale()
     local best, bestDist = nil, math.huge
     for _, model in ipairs(WhaleFolder:GetChildren()) do
         if model:IsA("Model") then
-            local center = getWhaleCenter(model)
+            local center = getWhaleCenterAndSize(model)
             if center then
                 local d = (center - myPos).Magnitude
                 if d < bestDist then best, bestDist = model, d end
@@ -93,6 +100,24 @@ WhaleFolder.ChildAdded:Connect(function(child)
     end
 end)
 
+-- ============ RELEASE — TRẢ PHYSICS VỀ BÌNH THƯỜNG ============
+local function releaseCharacter()
+    local c = LP.Character
+    if not c then return end
+    local h = c:FindFirstChildOfClass("Humanoid")
+    local r = c:FindFirstChild("HumanoidRootPart")
+    if h then
+        h.PlatformStand = false
+        h.WalkSpeed     = 16
+        h.JumpPower     = 50
+        h.UseJumpPower  = true
+    end
+    if r then
+        r.AssemblyLinearVelocity  = Vector3.zero
+        r.AssemblyAngularVelocity = Vector3.zero
+    end
+end
+
 -- ============ ON/OFF ============
 local function setEnabled(state)
     ENABLED = state
@@ -110,6 +135,17 @@ local function setEnabled(state)
             r.AssemblyLinearVelocity  = Vector3.zero
             r.AssemblyAngularVelocity = Vector3.zero
         end
+    end
+end
+
+local function syncUI()
+    if not toggleBtn then return end
+    if ENABLED then
+        toggleBtn.Text = "ON"
+        toggleBtn.BackgroundColor3 = Color3.fromRGB(50, 180, 90)
+    else
+        toggleBtn.Text = "OFF"
+        toggleBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
     end
 end
 
@@ -137,7 +173,7 @@ local function createUI()
     title.Size = UDim2.new(1, 0, 0, 25)
     title.Position = UDim2.new(0, 0, 0, 4)
     title.BackgroundTransparency = 1
-    title.Text = "🐋 AUTO WHALE v6.1"
+    title.Text = "🐋 AUTO WHALE v6.2"
     title.Font = Enum.Font.GothamBold
     title.TextSize = 13
     title.TextColor3 = Color3.fromRGB(240, 240, 240)
@@ -151,6 +187,7 @@ local function createUI()
     status.TextSize = 11
     status.TextColor3 = Color3.fromRGB(160, 160, 170)
     status.TextXAlignment = Enum.TextXAlignment.Left
+    statusLabel = status
 
     local btn = Instance.new("TextButton", frame)
     btn.Size = UDim2.new(1, -20, 0, 26)
@@ -162,31 +199,32 @@ local function createUI()
     btn.TextSize = 14
     btn.TextColor3 = Color3.fromRGB(255, 255, 255)
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    toggleBtn = btn
 
     btn.MouseButton1Click:Connect(function()
         setEnabled(not ENABLED)
+        syncUI()
         if ENABLED then
-            btn.Text = "ON"
-            btn.BackgroundColor3 = Color3.fromRGB(50, 180, 90)
             scanFolder(true)
-        else
-            btn.Text = "OFF"
-            btn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
         end
     end)
 
-    return gui, status
+    return gui
 end
 
-local ui, statusLabel = createUI()
+createUI()
 
 -- ============ MAIN LOOP ============
 RunService.Heartbeat:Connect(function(dt)
+    -- Cập nhật character nếu respawn
     if not char.Parent or not hrp.Parent then
         char = LP.Character or LP.CharacterAdded:Wait()
         hrp  = char:WaitForChild("HumanoidRootPart")
         hum  = char:WaitForChild("Humanoid")
-        if ENABLED then hum.PlatformStand = true; hum.WalkSpeed = 0 end
+        if ENABLED then
+            hum.PlatformStand = true
+            hum.WalkSpeed = 0
+        end
         return
     end
 
@@ -202,10 +240,20 @@ RunService.Heartbeat:Connect(function(dt)
         return
     end
 
-    local center = getWhaleCenter(currentTarget)
+    -- Lấy tâm + kích thước whale
+    local center, whaleSize = getWhaleCenterAndSize(currentTarget)
     if not center then return end
 
     local myPos = hrp.Position
+
+    -- ⭐ Bán kính ngang của whale để tránh kẹt vào model
+    local whaleRadius = 0
+    if whaleSize then
+        whaleRadius = math.max(whaleSize.X, whaleSize.Z) * 0.5
+    end
+
+    -- Khoảng đứng: cách MÉP whale ít nhất EDGE_PADDING studs
+    local standDist = math.max(STAND_DISTANCE, whaleRadius + EDGE_PADDING)
 
     -- Vector ngang từ whale tới player
     local horiz = Vector3.new(myPos.X - center.X, 0, myPos.Z - center.Z)
@@ -214,24 +262,28 @@ RunService.Heartbeat:Connect(function(dt)
     end
     local horizUnit = horiz.Unit
 
-    -- Điểm đứng: cách whale 60 studs XZ, ngang tầm Y whale
-    local standXZ = Vector3.new(center.X, 0, center.Z) + horizUnit * STAND_DISTANCE
-    local standY  = center.Y + HOVER_Y_OFFSET
+    -- Điểm đứng
+    local standXZ  = Vector3.new(center.X, 0, center.Z) + horizUnit * standDist
+    local standY   = center.Y + HOVER_Y_OFFSET
     local standPos = Vector3.new(standXZ.X, standY, standXZ.Z)
 
     local flatDist = horiz.Magnitude
-    local dy = myPos.Y - standY
+    local dy       = myPos.Y - standY
 
-    -- ============ STOP ============
-    if flatDist <= STAND_DISTANCE + 3 and math.abs(dy) <= 6 then
-        statusLabel.Text = string.format("✅ ĐÃ ĐỨNG (XZ:%.0f | Y:%.0f)", flatDist, dy)
+    -- ============ ĐÃ TỚI → THẢ XUỐNG ============
+    if flatDist <= standDist + ARRIVE_TOLERANCE and math.abs(dy) <= ARRIVE_Y_TOL then
+        statusLabel.Text = string.format("✅ ĐÃ TỚI (XZ:%.0f | Y:%.0f) — THẢ XUỐNG", flatDist, dy)
+        setEnabled(false)      -- tắt điều khiển
+        releaseCharacter()     -- trả physics → nhân vật rơi tự do
+        syncUI()               -- cập nhật nút thành OFF
         return
     end
 
     -- ============ QUYẾT ĐỊNH ============
+    local arriveXZ = math.max(H_ARRIVE_XZ, standDist + 40)
     local moveTarget, speed
 
-    if flatDist > H_ARRIVE_XZ then
+    if flatDist > arriveXZ then
         local safeY = math.max(center.Y + SAFE_HEIGHT, HIGH_Y_MIN)
         if myPos.Y < safeY - 10 then
             statusLabel.Text = string.format("rise | XZ:%.0f", flatDist)
@@ -253,8 +305,8 @@ RunService.Heartbeat:Connect(function(dt)
     local distance = diff.Magnitude
     if distance < 0.5 then return end
 
-    local dir  = diff.Unit
-    local step = math.min(speed * dt, distance)
+    local dir    = diff.Unit
+    local step   = math.min(speed * dt, distance)
     local newPos = myPos + dir * step
     local newCF  = CFrame.new(newPos) * (hrp.CFrame - hrp.CFrame.Position)
 
@@ -265,4 +317,4 @@ RunService.Heartbeat:Connect(function(dt)
     sendDash(newCF)
 end)
 
-print("[AutoWhale v6.1] Loaded — click ON để bật (stand 60 studs)")
+print("[AutoWhale v6.2] Loaded — click ON để bật (auto release khi tới)")
