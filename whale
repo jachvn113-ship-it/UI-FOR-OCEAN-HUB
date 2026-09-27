@@ -1,5 +1,5 @@
 -- ============================================
--- AUTO WHALE v6.4 — AUTO LOOP 24/7
+-- AUTO WHALE v6.5.1 — SAFE SPEED + FIX RESPAWN
 -- ============================================
 
 local Players           = game:GetService("Players")
@@ -7,15 +7,13 @@ local RunService        = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local LP   = Players.LocalPlayer
-local char = LP.Character or LP.CharacterAdded:Wait()
-local hrp  = char:WaitForChild("HumanoidRootPart")
-local hum  = char:WaitForChild("Humanoid")
+local char, hrp, hum
 
 local Remote      = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Input")
 local WhaleFolder = workspace:WaitForChild("Whale")
 
 -- ============ CONFIG ============
-local SPEED            = 200
+local SPEED            = 250     -- ⭐ an toàn, không bị shadow ban
 local SCAN_INTERVAL    = 0.5
 
 local STAND_DISTANCE   = 60
@@ -25,8 +23,8 @@ local HOVER_Y_OFFSET   = 5
 local SAFE_HEIGHT      = 60
 local HIGH_Y_MIN       = 120
 local H_ARRIVE_XZ      = 120
-local DESCEND_SPEED    = 350
-local SEND_INTERVAL    = 0.05
+local DESCEND_SPEED    = 200     -- ⭐ hạ cánh chậm, mượt
+local SEND_INTERVAL    = 0.08    -- ⭐ 12.5 dash/giây, không rate-limit
 
 local MIN_FLIGHT_TIME  = 1.5
 local MIN_FLIGHT_DIST  = 30
@@ -35,30 +33,33 @@ local MAX_WHALE_RADIUS = 300
 local ARRIVE_TOLERANCE = 5
 local ARRIVE_Y_TOL     = 8
 
--- ⭐ AUTO MODE
-local REARM_COOLDOWN   = 5      -- sau khi thả, chờ 5s mới nhận whale mới
-local AUTO_RETRY_DELAY = 2      -- nếu bật mà chưa có whale, thử lại sau 2s
+local REARM_COOLDOWN   = 5
+local AUTO_RETRY_DELAY = 2
+
+-- ⭐ Watchdog
+local STUCK_TIME_LIMIT = 3.0
 
 -- ============ STATE ============
 local ENABLED      = false
-local AUTO_MODE    = true      -- ⭐ bật mặc định
+local AUTO_MODE    = true
 local currentTarget = nil
 local lastScan     = 0
 local lastSend     = 0
 local toggleBtn    = nil
 local autoBtn      = nil
+local forceBtn     = nil
 local statusLabel  = nil
 
 local flightStartTime = 0
 local flightStartPos  = nil
 
--- ⭐ Chống dính whale vừa thả
 local lastReleasedWhale = nil
 local lastReleaseTime   = 0
 local lastAutoRetry     = 0
+local processedWhales   = {}
 
--- ⭐ Đánh dấu whale đã xử lý
-local processedWhales = {}
+local lastPos = Vector3.zero
+local stuckTimer = 0
 
 -- ============ XOÁ UI CŨ ============
 for _, g in ipairs(LP:WaitForChild("PlayerGui"):GetChildren()) do
@@ -67,7 +68,7 @@ for _, g in ipairs(LP:WaitForChild("PlayerGui"):GetChildren()) do
     end
 end
 
--- ============ HELPER ============
+-- ============ HELPER (khai báo trước) ============
 local function getWhaleInfo(model)
     if not model or not model.Parent then return nil, 0 end
 
@@ -106,6 +107,7 @@ local function isProcessed(whale)
 end
 
 local function findNearestWhale()
+    if not hrp then return nil end
     local myPos = hrp.Position
     local best, bestDist = nil, math.huge
     for _, model in ipairs(WhaleFolder:GetChildren()) do
@@ -129,63 +131,16 @@ local function scanFolder(force)
         return
     end
 
-    -- Nếu target cũ đã xử lý hoặc biến mất → tìm mới
-    if currentTarget and (not currentTarget.Parent or isProcessed(currentTarget)) then
-        currentTarget = nil
-    end
-
+    currentTarget = nil
     currentTarget = findNearestWhale()
 end
 
--- ⭐ Auto re-arm khi whale mới spawn
-WhaleFolder.ChildAdded:Connect(function(child)
-    if not child:IsA("Model") then return end
-
-    -- ⭐ Nếu AUTO_MODE + chưa bật + đủ cooldown → tự bật
-    if AUTO_MODE and not ENABLED then
-        local now = tick()
-        if now - lastReleaseTime < REARM_COOLDOWN then return end
-        if isProcessed(child) then return end
-
-        task.wait(0.3)   -- đợi whale khởi tạo xong
-        if child.Parent then
-            currentTarget = child
-            setEnabled(true)
-            syncUI()
-        end
-    else
-        -- Đang chạy → không nhảy target nếu target cũ còn valid
-        if ENABLED and (not currentTarget or not currentTarget.Parent) then
-            currentTarget = child
-        end
-    end
-end)
-
--- ============ RELEASE ============
-local function releaseCharacter()
-    local c = LP.Character
-    if not c then return end
-    local h = c:FindFirstChildOfClass("Humanoid")
-    local r = c:FindFirstChild("HumanoidRootPart")
-    if h then
-        h.PlatformStand = false
-        h.WalkSpeed     = 16
-        h.JumpPower     = 50
-        h.UseJumpPower  = true
-    end
-    if r then
-        r.AssemblyLinearVelocity  = Vector3.zero
-        r.AssemblyAngularVelocity = Vector3.zero
-    end
-end
-
--- ============ ON/OFF ============
+-- ============ SET ENABLED ============
 function setEnabled(state)
     ENABLED = state
-    local c = LP.Character
-    if c then
-        local h = c:FindFirstChildOfClass("Humanoid")
-        local r = c:FindFirstChild("HumanoidRootPart")
+    if char then
+        local h = char:FindFirstChildOfClass("Humanoid")
+        local r = char:FindFirstChild("HumanoidRootPart")
         if h then
             h.PlatformStand = state
             h.WalkSpeed     = state and 0 or 16
@@ -198,9 +153,11 @@ function setEnabled(state)
         end
     end
 
-    if state then
+    if state and hrp then
         flightStartTime = tick()
         flightStartPos  = hrp.Position
+        lastPos = hrp.Position
+        stuckTimer = 0
     end
 end
 
@@ -225,7 +182,74 @@ local function syncUI()
     end
 end
 
--- ⭐ Đánh dấu whale đã xử lý + vào cooldown
+-- ============ CHARACTER HANDLER ============
+local function onCharacterAdded(newChar)
+    char = newChar
+    hrp  = char:WaitForChild("HumanoidRootPart")
+    hum  = char:WaitForChild("Humanoid")
+
+    -- ⭐ Reset state khi respawn
+    currentTarget = nil
+    flightStartTime = tick()
+    flightStartPos = hrp.Position
+    lastPos = hrp.Position
+    stuckTimer = 0
+
+    if ENABLED then
+        hum.PlatformStand = true
+        hum.WalkSpeed     = 0
+        hum.JumpPower     = 0
+        hum.UseJumpPower  = true
+    end
+
+    task.wait(0.5)
+    scanFolder(true)
+end
+
+if LP.Character then
+    task.spawn(onCharacterAdded, LP.Character)
+end
+LP.CharacterAdded:Connect(onCharacterAdded)
+
+-- ============ WHALE FOLDER EVENT ============
+WhaleFolder.ChildAdded:Connect(function(child)
+    if not child:IsA("Model") then return end
+
+    if AUTO_MODE and not ENABLED then
+        local now = tick()
+        if now - lastReleaseTime < REARM_COOLDOWN then return end
+        if isProcessed(child) then return end
+
+        task.wait(0.3)
+        if child.Parent then
+            currentTarget = child
+            setEnabled(true)
+            syncUI()
+        end
+    else
+        if ENABLED and (not currentTarget or not currentTarget.Parent) then
+            currentTarget = child
+        end
+    end
+end)
+
+-- ============ RELEASE ============
+local function releaseCharacter()
+    if not char then return end
+    local h = char:FindFirstChildOfClass("Humanoid")
+    local r = char:FindFirstChild("HumanoidRootPart")
+    if h then
+        h.PlatformStand = false
+        h.WalkSpeed     = 16
+        h.JumpPower     = 50
+        h.UseJumpPower  = true
+    end
+    if r then
+        r.AssemblyLinearVelocity  = Vector3.zero
+        r.AssemblyAngularVelocity = Vector3.zero
+    end
+end
+
 local function markReleased(whale)
     if whale then
         processedWhales[whale] = true
@@ -234,7 +258,6 @@ local function markReleased(whale)
     lastReleaseTime = tick()
 end
 
--- Dọn whale chết khỏi danh sách đã xử lý
 task.spawn(function()
     while true do
         task.wait(10)
@@ -254,7 +277,7 @@ local function createUI()
     gui.Parent = LP:WaitForChild("PlayerGui")
 
     local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0, 220, 0, 115)
+    frame.Size = UDim2.new(0, 240, 0, 145)
     frame.Position = UDim2.new(0, 20, 0, 100)
     frame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
     frame.BorderSizePixel = 0
@@ -270,7 +293,7 @@ local function createUI()
     title.Size = UDim2.new(1, 0, 0, 25)
     title.Position = UDim2.new(0, 0, 0, 4)
     title.BackgroundTransparency = 1
-    title.Text = "🐋 AUTO WHALE v6.4"
+    title.Text = "🐋 AUTO WHALE v6.5.1"
     title.Font = Enum.Font.GothamBold
     title.TextSize = 13
     title.TextColor3 = Color3.fromRGB(240, 240, 240)
@@ -286,7 +309,6 @@ local function createUI()
     status.TextXAlignment = Enum.TextXAlignment.Left
     statusLabel = status
 
-    -- Nút ON/OFF
     local btn = Instance.new("TextButton", frame)
     btn.Size = UDim2.new(0.5, -14, 0, 26)
     btn.Position = UDim2.new(0, 10, 0, 48)
@@ -299,7 +321,6 @@ local function createUI()
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
     toggleBtn = btn
 
-    -- ⭐ Nút AUTO
     local abtn = Instance.new("TextButton", frame)
     abtn.Size = UDim2.new(0.5, -14, 0, 26)
     abtn.Position = UDim2.new(0.5, 4, 0, 48)
@@ -312,10 +333,21 @@ local function createUI()
     Instance.new("UICorner", abtn).CornerRadius = UDim.new(0, 6)
     autoBtn = abtn
 
-    -- Label phụ
+    local fbtn = Instance.new("TextButton", frame)
+    fbtn.Size = UDim2.new(1, -20, 0, 24)
+    fbtn.Position = UDim2.new(0, 10, 0, 80)
+    fbtn.BackgroundColor3 = Color3.fromRGB(200, 140, 30)
+    fbtn.BorderSizePixel = 0
+    fbtn.Text = "⚡ FORCE FLY (khi bị bug)"
+    fbtn.Font = Enum.Font.GothamBold
+    fbtn.TextSize = 11
+    fbtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Instance.new("UICorner", fbtn).CornerRadius = UDim.new(0, 6)
+    forceBtn = fbtn
+
     local hint = Instance.new("TextLabel", frame)
     hint.Size = UDim2.new(1, -20, 0, 14)
-    hint.Position = UDim2.new(0, 10, 0, 82)
+    hint.Position = UDim2.new(0, 10, 0, 108)
     hint.BackgroundTransparency = 1
     hint.Text = "AUTO: tự bật lại khi có whale mới"
     hint.Font = Enum.Font.Gotham
@@ -323,7 +355,6 @@ local function createUI()
     hint.TextColor3 = Color3.fromRGB(120, 120, 130)
     hint.TextXAlignment = Enum.TextXAlignment.Left
 
-    -- Events
     btn.MouseButton1Click:Connect(function()
         setEnabled(not ENABLED)
         syncUI()
@@ -335,6 +366,20 @@ local function createUI()
         syncUI()
     end)
 
+    fbtn.MouseButton1Click:Connect(function()
+        currentTarget = nil
+        if hrp then
+            flightStartTime = tick()
+            flightStartPos  = hrp.Position
+            lastPos = hrp.Position
+            stuckTimer = 0
+        end
+        setEnabled(true)
+        scanFolder(true)
+        syncUI()
+        statusLabel.Text = "⚡ FORCE FLY!"
+    end)
+
     return gui
 end
 
@@ -343,18 +388,11 @@ syncUI()
 
 -- ============ MAIN LOOP ============
 RunService.Heartbeat:Connect(function(dt)
-    if not char.Parent or not hrp.Parent then
-        char = LP.Character or LP.CharacterAdded:Wait()
-        hrp  = char:WaitForChild("HumanoidRootPart")
-        hum  = char:WaitForChild("Humanoid")
-        if ENABLED then
-            hum.PlatformStand = true
-            hum.WalkSpeed = 0
-        end
+    if not char or not char.Parent or not hrp or not hrp.Parent then
         return
     end
 
-    -- ⭐ AUTO: nếu chưa bật + AUTO_MODE + chưa cooldown → thử bật
+    -- AUTO: nếu chưa bật + AUTO_MODE + chưa cooldown → thử bật
     if not ENABLED then
         if AUTO_MODE then
             local now = tick()
@@ -439,12 +477,37 @@ RunService.Heartbeat:Connect(function(dt)
         moveTarget = standPos
     end
 
+    -- ⭐ Giảm tốc khi gần whale (tránh flag anti-cheat)
+    if flatDist < 300 then
+        speed = math.min(speed, 150)
+    end
+    if flatDist < 150 then
+        speed = math.min(speed, 100)
+    end
+    if flatDist < standDist + 50 then
+        speed = math.min(speed, 80)
+    end
+
+    -- ⭐ Watchdog: 3s không di chuyển → re-fire dash
+    local moved = (myPos - lastPos).Magnitude
+    if moved < 1 then
+        stuckTimer = stuckTimer + dt
+        if stuckTimer >= STUCK_TIME_LIMIT then
+            stuckTimer = 0
+            Remote:FireServer("Dash", hrp.CFrame)
+        end
+    else
+        stuckTimer = 0
+    end
+    lastPos = myPos
+
     statusLabel.Text = string.format(
         "%s d=%.0f r=%.0f dy=%.0f %s",
         phase, flatDist, standDist, dy,
         canRelease and "" or "(lock)"
     )
 
+    -- ============ DI CHUYỂN ============
     local diff     = moveTarget - myPos
     local distance = diff.Magnitude
     if distance < 0.5 then return end
@@ -461,4 +524,4 @@ RunService.Heartbeat:Connect(function(dt)
     sendDash(newCF)
 end)
 
-print("[AutoWhale v6.4] Loaded — AUTO LOOP 24/7")
+print("[AutoWhale v6.5.1] Loaded — safe speed 250 + auto release + respawn fix")
