@@ -1,5 +1,5 @@
 -- ============================================================
--- COMBINED v10.7 - FOLLOW LOCK + FIX LOOKAT + KHÔNG CÚI MẶT
+-- COMBINED v10.9 - FOLLOW LOCK + FIX LOOKAT + AUTO CHEST
 -- ============================================================
 
 local Players           = game:GetService("Players")
@@ -345,7 +345,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 44)
 title.BackgroundColor3 = Color3.fromRGB(35, 35, 46)
 title.BorderSizePixel = 0
-title.Text = "⚙  AUTO CONTROLS v10.7"
+title.Text = "⚙  AUTO CONTROLS v10.9"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 18
@@ -938,7 +938,7 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- PART C: NPC + SPAWN BOSS + CHIHORA (đã sửa - không tween tới NPC)
+-- PART C: NPC + SPAWN BOSS + CHIHORA
 -- ============================================================
 task.spawn(function()
     local Remotes   = ReplicatedStorage:WaitForChild("Remotes", 30)
@@ -961,7 +961,7 @@ task.spawn(function()
     local RETURN_SPEED     = 45
     local BOSS_STANDOFF    = 12
     local FARM_RADIUS      = 22
-    local NPC_SPAWN_RADIUS = 80   -- ✅ chỉ spam khi cách NPC <= 50 studs
+    local NPC_SPAWN_RADIUS = 80
     local LOOP_WAIT        = 0.15
     local LOST_GRACE       = 1.5
 
@@ -1032,7 +1032,6 @@ task.spawn(function()
                 end
 
                 if chihora and chihoraAlive then
-                    -- ✅ Chihora active → tắt FollowLock của Yhwach
                     if FollowLock.active then FollowLock:deactivate() end
 
                     lostEnemyAt = nil
@@ -1045,7 +1044,6 @@ task.spawn(function()
                         local dx, dy, dz = myPos.X - enemyPos.X, myPos.Y - enemyPos.Y, myPos.Z - enemyPos.Z
                         local dist = math.sqrt(dx*dx + dy*dy + dz*dz)
 
-                        -- ✅ Vẫn tween lại 1 tí khi xa Chihora
                         if dist > FARM_RADIUS then
                             local ux, uy, uz
                             if dist < 0.5 then ux, uy, uz = 1, 0, 0
@@ -1078,11 +1076,9 @@ task.spawn(function()
                             local dist = math.sqrt(dx*dx + dy*dy + dz*dz)
 
                             if dist <= NPC_SPAWN_RADIUS then
-                                -- ✅ Đủ gần NPC (<= 50 studs) → spam spawn
                                 phase = "SPAWNING"
                                 trySpawnBoss(os.clock())
                             else
-                                -- ❌ Xa NPC → KHÔNG tween, user tự điều khiển
                                 phase = "WAIT_NPC"
                             end
                         end
@@ -1095,4 +1091,73 @@ task.spawn(function()
     end
 end)
 
-print("[COMBINED v10.7] GlobalBoss + Chihora + Yhwach(FollowLock) + AutoAttack + Weapon + SmoothTween + DashBypass + NoNPC Tween")
+-- ============================================================
+-- PART D: AUTO OPEN CHEST (tự động fire khi đủ 10k)
+-- ============================================================
+task.spawn(function()
+    local Remotes = ReplicatedStorage:WaitForChild("Remotes", 30)
+    local UseItem = Remotes:WaitForChild("RE_UseItem", 30)
+
+    local CHEST_LIST = {
+        "Legendary Chest",
+        "Legendary Gem Chest",
+        "Mythical Chest",
+    }
+    local THRESHOLD       = 10000
+    local CHECK_INTERVAL  = 60
+    local firedAt         = {}   -- chống spam fire cùng 1 chest
+
+    for _, n in ipairs(CHEST_LIST) do firedAt[n] = 0 end
+
+    local function getAmount(chestName)
+        local ok, amount = pcall(function()
+            local data = LocalPlayer:FindFirstChild("Data")
+            if not data then return 0 end
+            local inv = data:FindFirstChild("Inventory")
+            if not inv then return 0 end
+            local item = inv:FindFirstChild(chestName)
+            if not item then
+                -- fallback: có thể Inventory là table
+                local raw = rawget(inv, chestName)
+                if type(raw) == "table" then
+                    return raw.Amount or 0
+                end
+                return 0
+            end
+            -- TH1: item là NumberValue/IntValue
+            if item:IsA("ValueBase") then return item.Value end
+            -- TH2: item có con Amount
+            local amt = item:FindFirstChild("Amount")
+            if amt and amt:IsA("ValueBase") then return amt.Value end
+            -- TH3: Amount là attribute
+            local attr = item:GetAttribute("Amount")
+            if type(attr) == "number" then return attr end
+            return 0
+        end)
+        if ok and type(amount) == "number" then return amount end
+        return 0
+    end
+
+    local function tryOpen(chestName)
+        local amount = getAmount(chestName)
+        if amount >= THRESHOLD then
+            local now = os.clock()
+            if now - (firedAt[chestName] or 0) < 1.0 then return end
+            firedAt[chestName] = now
+            print(("[AutoChest] %s = %d → FIRE"):format(chestName, amount))
+            pcall(function()
+                UseItem:FireServer(chestName, THRESHOLD, 0)
+            end)
+        end
+    end
+
+    while true do
+        for _, chestName in ipairs(CHEST_LIST) do
+            pcall(tryOpen, chestName)
+            task.wait(0.15)
+        end
+        task.wait(CHECK_INTERVAL)
+    end
+end)
+
+print("[COMBINED v10.9] GlobalBoss + Chihora + Yhwach(FollowLock) + AutoAttack + Weapon + SmoothTween + DashBypass + AutoChest(10k)")
