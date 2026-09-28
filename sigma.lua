@@ -1,5 +1,5 @@
 -- ============================================================
--- COMBINED v10.6 - FOLLOW LOCK + FIX LOOKAT + KHÔNG CÚI MẶT
+-- COMBINED v10.7 - FOLLOW LOCK + FIX LOOKAT + KHÔNG CÚI MẶT
 -- ============================================================
 
 local Players           = game:GetService("Players")
@@ -103,7 +103,6 @@ function FollowLock:activate(enemy, standoff)
     local myPos    = hrp.Position
     local enemyPos = enemyRoot.Position
 
-    -- Vector offset nằm ngang (bỏ Y)
     local dx, dz = myPos.X - enemyPos.X, myPos.Z - enemyPos.Z
     local magXZ  = math.sqrt(dx*dx + dz*dz)
     local dir
@@ -113,7 +112,6 @@ function FollowLock:activate(enemy, standoff)
         dir = Vector3.new(dx/magXZ, 0, dz/magXZ)
     end
 
-    -- Clamp khoảng cách ngang: 6..standoff*1.5
     local dist = math.clamp(magXZ, 6, standoff * 1.5)
 
     self.offset = dir * dist
@@ -152,7 +150,6 @@ RunService.Heartbeat:Connect(function()
     local desiredPos = enemyPos + FollowLock.offset
     desiredPos = Vector3.new(desiredPos.X, FollowLock.yLock, desiredPos.Z)
 
-    -- ✅ Nhìn NGANG, Y bằng nhau → không cúi, không ngửa
     local lookAt = Vector3.new(enemyPos.X, desiredPos.Y, enemyPos.Z)
     if (lookAt - desiredPos).Magnitude < 0.5 then return end
 
@@ -321,7 +318,7 @@ local function getGlobalTweenH()
 end
 
 -- ============================================================
--- UI (giữ nguyên)
+-- UI
 -- ============================================================
 local pg = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -348,7 +345,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 44)
 title.BackgroundColor3 = Color3.fromRGB(35, 35, 46)
 title.BorderSizePixel = 0
-title.Text = "⚙  AUTO CONTROLS v10.6"
+title.Text = "⚙  AUTO CONTROLS v10.7"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 18
@@ -890,7 +887,6 @@ task.spawn(function()
 
                     local char = LocalPlayer.Character
                     local humanoid = char and char:FindFirstChildOfClass("Humanoid")
-                    -- ✅ KHÔNG dùng PlatformStand khi ở gần → animation Idle/Walk chạy bình thường
                     if humanoid then humanoid.PlatformStand = false end
 
                     local myPos    = tweenH.hrp.Position
@@ -899,7 +895,6 @@ task.spawn(function()
                     local dist = math.sqrt(dx*dx + dy*dy + dz*dz)
 
                     if dist > FARM_RADIUS then
-                        -- Xa → tắt lock, tween lại
                         if FollowLock.active then FollowLock:deactivate() end
 
                         local ux, uy, uz
@@ -912,7 +907,6 @@ task.spawn(function()
                             enemyPos.Z + uz * STANDOFF
                         )
 
-                        -- ✅ FIX CÚI MẶT: lookAt có cùng Y với targetPos → nhìn ngang
                         local lookAt = Vector3.new(enemyPos.X, targetPos.Y, enemyPos.Z)
                         local goalCF = CFrame.new(targetPos, lookAt)
 
@@ -920,7 +914,6 @@ task.spawn(function()
                             tweenH:moveToTarget(goalCF, MOVE_SPEED)
                         end
                     else
-                        -- Trong bán kính → bật FollowLock
                         if not FollowLock.active then
                             tweenH:abort()
                             FollowLock:activate(yhwach, STANDOFF)
@@ -945,7 +938,7 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- PART C: NPC + SPAWN BOSS + CHIHORA
+-- PART C: NPC + SPAWN BOSS + CHIHORA (đã sửa - không tween tới NPC)
 -- ============================================================
 task.spawn(function()
     local Remotes   = ReplicatedStorage:WaitForChild("Remotes", 30)
@@ -954,6 +947,7 @@ task.spawn(function()
     local GoldShopBuy = Events:WaitForChild("GoldShopBuy", 30)
     local InputRemote = Functions:WaitForChild("Input", 30)
 
+    -- Giữ nguyên: auto mua Boss Ticket
     task.spawn(function()
         while true do
             if State.Chihora then
@@ -967,7 +961,7 @@ task.spawn(function()
     local RETURN_SPEED     = 45
     local BOSS_STANDOFF    = 12
     local FARM_RADIUS      = 22
-    local NPC_RETWEEN_DIST = 100
+    local NPC_SPAWN_RADIUS = 50   -- ✅ chỉ spam khi cách NPC <= 50 studs
     local LOOP_WAIT        = 0.15
     local LOST_GRACE       = 1.5
 
@@ -1051,6 +1045,7 @@ task.spawn(function()
                         local dx, dy, dz = myPos.X - enemyPos.X, myPos.Y - enemyPos.Y, myPos.Z - enemyPos.Z
                         local dist = math.sqrt(dx*dx + dy*dy + dz*dz)
 
+                        -- ✅ Vẫn tween lại 1 tí khi xa Chihora
                         if dist > FARM_RADIUS then
                             local ux, uy, uz
                             if dist < 0.5 then ux, uy, uz = 1, 0, 0
@@ -1061,7 +1056,6 @@ task.spawn(function()
                                 enemyPos.Y + uy * BOSS_STANDOFF,
                                 enemyPos.Z + uz * BOSS_STANDOFF
                             )
-                            -- ✅ lookAt ngang
                             local lookAt = Vector3.new(enemyPos.X, targetPos.Y, enemyPos.Z)
                             local targetCF = CFrame.new(targetPos, lookAt)
 
@@ -1083,18 +1077,13 @@ task.spawn(function()
                             local dx, dy, dz = myPos.X - npcPos.X, myPos.Y - npcPos.Y, myPos.Z - npcPos.Z
                             local dist = math.sqrt(dx*dx + dy*dy + dz*dz)
 
-                            if dist >= NPC_RETWEEN_DIST then
-                                phase = "TO_NPC"
-                                local lookVec = Vector3.new(npcPos.X - myPos.X, npcPos.Y - myPos.Y, npcPos.Z - myPos.Z)
-                                if lookVec.Magnitude < 0.5 then lookVec = Vector3.new(1, 0, 0) end
-                                local targetCF = CFrame.new(npcPos, npcPos + lookVec)
-
-                                if not tweenH:isMoving() then
-                                    tweenH:moveToTarget(targetCF, MOVE_SPEED)
-                                end
-                            else
+                            if dist <= NPC_SPAWN_RADIUS then
+                                -- ✅ Đủ gần NPC (<= 50 studs) → spam spawn
                                 phase = "SPAWNING"
                                 trySpawnBoss(os.clock())
+                            else
+                                -- ❌ Xa NPC → KHÔNG tween, user tự điều khiển
+                                phase = "WAIT_NPC"
                             end
                         end
                     end
@@ -1106,4 +1095,4 @@ task.spawn(function()
     end
 end)
 
-print("[COMBINED v10.6] GlobalBoss + Chihora + Yhwach(FollowLock) + AutoAttack + Weapon + SmoothTween + DashBypass")
+print("[COMBINED v10.7] GlobalBoss + Chihora + Yhwach(FollowLock) + AutoAttack + Weapon + SmoothTween + DashBypass + NoNPC Tween")
