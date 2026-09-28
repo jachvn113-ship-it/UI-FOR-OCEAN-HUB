@@ -1,5 +1,5 @@
 -- ============================================================
--- COMBINED v10.9 - FOLLOW LOCK + FIX LOOKAT + AUTO CHEST
+-- COMBINED v11.0 - FOLLOW LOCK + AUTO CHEST + RAM CLEANER
 -- ============================================================
 
 local Players           = game:GetService("Players")
@@ -345,7 +345,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 44)
 title.BackgroundColor3 = Color3.fromRGB(35, 35, 46)
 title.BorderSizePixel = 0
-title.Text = "⚙  AUTO CONTROLS v10.9"
+title.Text = "⚙  AUTO CONTROLS v11.0"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 18
@@ -692,21 +692,86 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- BỘ DỌN RÁC
+-- RAM CLEANER - Auto clear cache liên tục để đỡ lag
 -- ============================================================
-task.spawn(function()
-    local lastFull = 0
-    while true do
-        local now = os.clock()
-        if now - lastFull >= 5 then
-            lastFull = now
-            pcall(function() collectgarbage("collect") end)
-        else
-            pcall(function() collectgarbage("step") end)
+do
+    local RAMConfig = {
+        StepInterval   = 1,      -- mỗi 1s GC step (nhẹ)
+        FullInterval   = 30,     -- mỗi 30s full GC (mạnh)
+        LogEnabled     = false,
+    }
+
+    -- Tối ưu GC (nếu executor hỗ trợ)
+    pcall(function()
+        collectgarbage("setpause", 100)
+        collectgarbage("setstepmul", 200)
+    end)
+
+    -- 1. GARBAGE COLLECTOR
+    task.spawn(function()
+        local lastFull = 0
+        while true do
+            local now = os.clock()
+            if now - lastFull >= RAMConfig.FullInterval then
+                lastFull = now
+                pcall(function() collectgarbage("collect") end)
+                if RAMConfig.LogEnabled then print("[RAM] Full GC") end
+            else
+                pcall(function() collectgarbage("step") end)
+            end
+            task.wait(RAMConfig.StepInterval)
         end
-        task.wait(1)
-    end
-end)
+    end)
+
+    -- 2. XOÁ PART RÁC NGOÀI MAP
+    task.spawn(function()
+        while true do
+            task.wait(15)
+            pcall(function()
+                for _, v in ipairs(workspace:GetChildren()) do
+                    if v:IsA("BasePart") then
+                        local pos = v.Position
+                        if pos.Y < -500 or pos.Y > 100000 then
+                            v:Destroy()
+                        end
+                    end
+                end
+            end)
+        end
+    end)
+
+    -- 3. GIẢM PARTICLE / TRAIL DƯ (không phải nhân vật mình)
+    task.spawn(function()
+        while true do
+            task.wait(30)
+            pcall(function()
+                local char = LocalPlayer.Character
+                for _, v in ipairs(workspace:GetDescendants()) do
+                    if v:IsA("ParticleEmitter") and v.Enabled and v.Parent ~= char then
+                        if v.Rate > 500 then v.Rate = 100 end
+                    end
+                    if v:IsA("Trail") and v.Parent ~= char and v.Enabled then
+                        if v.Lifetime > 2 then v.Lifetime = 0.5 end
+                    end
+                end
+            end)
+        end
+    end)
+
+    -- 4. TẮT SOUND DƯ (volume ~0)
+    task.spawn(function()
+        while true do
+            task.wait(20)
+            pcall(function()
+                for _, v in ipairs(game:GetDescendants()) do
+                    if v:IsA("Sound") and v.IsPlaying and v.Volume <= 0.01 then
+                        v:Stop()
+                    end
+                end
+            end)
+        end
+    end)
+end
 
 -- ============================================================
 -- CACHE
@@ -1103,9 +1168,9 @@ task.spawn(function()
         "Legendary Gem Chest",
         "Mythical Chest",
     }
-    local THRESHOLD       = 10000
-    local CHECK_INTERVAL  = 60
-    local firedAt         = {}   -- chống spam fire cùng 1 chest
+    local THRESHOLD      = 10000
+    local CHECK_INTERVAL = 60
+    local firedAt        = {}
 
     for _, n in ipairs(CHEST_LIST) do firedAt[n] = 0 end
 
@@ -1117,19 +1182,15 @@ task.spawn(function()
             if not inv then return 0 end
             local item = inv:FindFirstChild(chestName)
             if not item then
-                -- fallback: có thể Inventory là table
                 local raw = rawget(inv, chestName)
                 if type(raw) == "table" then
                     return raw.Amount or 0
                 end
                 return 0
             end
-            -- TH1: item là NumberValue/IntValue
             if item:IsA("ValueBase") then return item.Value end
-            -- TH2: item có con Amount
             local amt = item:FindFirstChild("Amount")
             if amt and amt:IsA("ValueBase") then return amt.Value end
-            -- TH3: Amount là attribute
             local attr = item:GetAttribute("Amount")
             if type(attr) == "number" then return attr end
             return 0
@@ -1160,4 +1221,4 @@ task.spawn(function()
     end
 end)
 
-print("[COMBINED v10.9] GlobalBoss + Chihora + Yhwach(FollowLock) + AutoAttack + Weapon + SmoothTween + DashBypass + AutoChest(10k)")
+print("[COMBINED v11.0] GlobalBoss + Chihora + Yhwach(FollowLock) + AutoAttack + Weapon + SmoothTween + DashBypass + AutoChest(10k) + RAM Cleaner")
