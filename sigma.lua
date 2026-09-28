@@ -961,7 +961,7 @@ task.spawn(function()
     local RETURN_SPEED     = 45
     local BOSS_STANDOFF    = 12
     local FARM_RADIUS      = 22
-    local NPC_SPAWN_RADIUS = 50   -- ✅ chỉ spam khi cách NPC <= 50 studs
+    local NPC_SPAWN_RADIUS = 80   -- ✅ chỉ spam khi cách NPC <= 50 studs
     local LOOP_WAIT        = 0.15
     local LOST_GRACE       = 1.5
 
