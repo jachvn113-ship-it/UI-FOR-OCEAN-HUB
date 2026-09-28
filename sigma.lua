@@ -1,5 +1,5 @@
 -- ============================================================
--- COMBINED v11.0 - FOLLOW LOCK + AUTO CHEST + RAM CLEANER
+-- COMBINED v11.1 - FOLLOW LOCK + AUTO CHEST + RAM CLEANER + ANTI-AFK
 -- ============================================================
 
 local Players           = game:GetService("Players")
@@ -345,7 +345,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 44)
 title.BackgroundColor3 = Color3.fromRGB(35, 35, 46)
 title.BorderSizePixel = 0
-title.Text = "⚙  AUTO CONTROLS v11.0"
+title.Text = "⚙  AUTO CONTROLS v11.1"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 18
@@ -696,12 +696,11 @@ end)
 -- ============================================================
 do
     local RAMConfig = {
-        StepInterval   = 1,      -- mỗi 1s GC step (nhẹ)
-        FullInterval   = 30,     -- mỗi 30s full GC (mạnh)
+        StepInterval   = 1,
+        FullInterval   = 30,
         LogEnabled     = false,
     }
 
-    -- Tối ưu GC (nếu executor hỗ trợ)
     pcall(function()
         collectgarbage("setpause", 100)
         collectgarbage("setstepmul", 200)
@@ -740,7 +739,7 @@ do
         end
     end)
 
-    -- 3. GIẢM PARTICLE / TRAIL DƯ (không phải nhân vật mình)
+    -- 3. GIẢM PARTICLE / TRAIL DƯ
     task.spawn(function()
         while true do
             task.wait(30)
@@ -758,7 +757,7 @@ do
         end
     end)
 
-    -- 4. TẮT SOUND DƯ (volume ~0)
+    -- 4. TẮT SOUND DƯ
     task.spawn(function()
         while true do
             task.wait(20)
@@ -772,6 +771,88 @@ do
         end
     end)
 end
+
+-- ============================================================
+-- ANTI-AFK - Giả lập người thật mỗi 30s tránh bị kick
+-- ============================================================
+task.spawn(function()
+    local VIM = game:GetService("VirtualInputManager")
+
+    local INTERVAL = 30
+
+    local function pressKey(keyCode)
+        pcall(function()
+            VIM:SendKeyEvent(true,  keyCode, false, game)
+            task.wait(math.random(30, 80) / 1000)
+            VIM:SendKeyEvent(false, keyCode, false, game)
+        end)
+    end
+
+    local function moveMouse()
+        pcall(function()
+            local cam = workspace.CurrentCamera
+            if not cam then return end
+            local vp = cam.ViewportSize
+            local x = math.random(100, math.max(200, vp.X - 100))
+            local y = math.random(100, math.max(200, vp.Y - 100))
+            VIM:SendMouseMoveEvent(x, y, game)
+        end)
+    end
+
+    local function jumpOnce()
+        local char = LocalPlayer.Character
+        local hum  = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            pcall(function() hum.Jump = true end)
+        end
+    end
+
+    local function shakeCamera()
+        pcall(function()
+            local cam = workspace.CurrentCamera
+            if not cam then return end
+            local oldCF = cam.CFrame
+            cam.CFrame = oldCF * CFrame.Angles(0, math.rad(math.random(-15, 15)), 0)
+        end)
+    end
+
+    local function doAntiAFK()
+        local act = math.random(1, 4)
+        if act == 1 then
+            pressKey(Enum.KeyCode.Space)
+            task.wait(0.2)
+            jumpOnce()
+        elseif act == 2 then
+            moveMouse()
+            task.wait(0.3)
+            moveMouse()
+        elseif act == 3 then
+            pressKey(Enum.KeyCode.A)
+            task.wait(0.15)
+            pressKey(Enum.KeyCode.D)
+        elseif act == 4 then
+            shakeCamera()
+        end
+    end
+
+    -- Hook Idled event (nếu có)
+    pcall(function()
+        LocalPlayer.Idled:Connect(function()
+            if typeof(VirtualUser) == "table" and VirtualUser.Button2Down then
+                pcall(function()
+                    VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+                    task.wait(0.5)
+                    VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+                end)
+            end
+        end)
+    end)
+
+    while true do
+        task.wait(INTERVAL)
+        pcall(doAntiAFK)
+    end
+end)
 
 -- ============================================================
 -- CACHE
@@ -1221,4 +1302,4 @@ task.spawn(function()
     end
 end)
 
-print("[COMBINED v11.0] GlobalBoss + Chihora + Yhwach(FollowLock) + AutoAttack + Weapon + SmoothTween + DashBypass + AutoChest(10k) + RAM Cleaner")
+print("[COMBINED v11.1] GlobalBoss + Chihora + Yhwach(FollowLock) + AutoAttack + Weapon + SmoothTween + DashBypass + AutoChest(10k) + RAM Cleaner + AntiAFK")
