@@ -1,5 +1,6 @@
 -- ============================================================
--- COMBINED v11.1 - FOLLOW LOCK + AUTO CHEST + RAM CLEANER + ANTI-AFK
+-- COMBINED v11.2 - FOLLOW LOCK + AUTO CHEST + RAM CLEANER + ANTI-AFK
+-- Chest: mỗi loại đạt 10.000 thì mở 1.000 (kiểm tra độc lập)
 -- ============================================================
 
 local Players           = game:GetService("Players")
@@ -345,7 +346,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 44)
 title.BackgroundColor3 = Color3.fromRGB(35, 35, 46)
 title.BorderSizePixel = 0
-title.Text = "⚙  AUTO CONTROLS v11.1"
+title.Text = "⚙  AUTO CONTROLS v11.2"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 18
@@ -1238,62 +1239,78 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- PART D: AUTO OPEN CHEST (tự động fire khi đủ 10k)
+-- PART D: AUTO OPEN CHEST (ĐẠT LIMIT 10K -> MỞ 1K)
+-- 3 loại chest kiểm tra RIÊNG, không cần đủ cả 3 loại.
 -- ============================================================
 task.spawn(function()
     local Remotes = ReplicatedStorage:WaitForChild("Remotes", 30)
+    if not Remotes then
+        warn("[AutoChest] Không tìm thấy Remotes")
+        return
+    end
+
     local UseItem = Remotes:WaitForChild("RE_UseItem", 30)
+    if not UseItem then
+        warn("[AutoChest] Không tìm thấy RE_UseItem")
+        return
+    end
 
     local CHEST_LIST = {
         "Legendary Chest",
         "Legendary Gem Chest",
         "Mythical Chest",
     }
-    local THRESHOLD      = 10000
-    local CHECK_INTERVAL = 60
-    local firedAt        = {}
 
-    for _, n in ipairs(CHEST_LIST) do firedAt[n] = 0 end
+    local CHEST_LIMIT    = 10000
+    local OPEN_AMOUNT    = 1000
+    local CHECK_INTERVAL = 60
 
     local function getAmount(chestName)
-        local ok, amount = pcall(function()
-            local data = LocalPlayer:FindFirstChild("Data")
-            if not data then return 0 end
-            local inv = data:FindFirstChild("Inventory")
-            if not inv then return 0 end
-            local item = inv:FindFirstChild(chestName)
-            if not item then
-                local raw = rawget(inv, chestName)
-                if type(raw) == "table" then
-                    return raw.Amount or 0
-                end
-                return 0
-            end
-            if item:IsA("ValueBase") then return item.Value end
-            local amt = item:FindFirstChild("Amount")
-            if amt and amt:IsA("ValueBase") then return amt.Value end
-            local attr = item:GetAttribute("Amount")
-            if type(attr) == "number" then return attr end
-            return 0
-        end)
-        if ok and type(amount) == "number" then return amount end
+        local data = LocalPlayer:FindFirstChild("Data")
+        if not data then return 0 end
+
+        local inventory = data:FindFirstChild("Inventory")
+        if not inventory then return 0 end
+
+        local item = inventory:FindFirstChild(chestName)
+        if not item then return 0 end
+
+        if item:IsA("ValueBase") and type(item.Value) == "number" then
+            return item.Value
+        end
+
+        local amountValue = item:FindFirstChild("Amount")
+        if amountValue and amountValue:IsA("ValueBase")
+            and type(amountValue.Value) == "number" then
+            return amountValue.Value
+        end
+
+        local amountAttribute = item:GetAttribute("Amount")
+        if type(amountAttribute) == "number" then
+            return amountAttribute
+        end
+
         return 0
     end
 
     local function tryOpen(chestName)
         local amount = getAmount(chestName)
-        if amount >= THRESHOLD then
-            local now = os.clock()
-            if now - (firedAt[chestName] or 0) < 1.0 then return end
-            firedAt[chestName] = now
-            print(("[AutoChest] %s = %d → FIRE"):format(chestName, amount))
-            pcall(function()
-                UseItem:FireServer(chestName, THRESHOLD, 0)
-            end)
+        -- Chest có giới hạn chứa 10.000: chỉ mở khi đạt đủ limit.
+        if amount < CHEST_LIMIT then return end
+
+        print(("[AutoChest] %s: %d/%d -> yêu cầu mở %d")
+            :format(chestName, amount, CHEST_LIMIT, OPEN_AMOUNT))
+
+        local ok, err = pcall(function()
+            UseItem:FireServer(chestName, OPEN_AMOUNT, 0)
+        end)
+        if not ok then
+            warn("[AutoChest] Lỗi gửi lệnh cho " .. chestName .. ": " .. tostring(err))
         end
     end
 
     while true do
+        -- Mỗi loại chest được quyết định độc lập.
         for _, chestName in ipairs(CHEST_LIST) do
             pcall(tryOpen, chestName)
             task.wait(0.15)
@@ -1302,4 +1319,4 @@ task.spawn(function()
     end
 end)
 
-print("[COMBINED v11.1] GlobalBoss + Chihora + Yhwach(FollowLock) + AutoAttack + Weapon + SmoothTween + DashBypass + AutoChest(10k) + RAM Cleaner + AntiAFK")
+print("[COMBINED v11.2] GlobalBoss + Chihora + Yhwach(FollowLock) + AutoAttack + Weapon + SmoothTween + DashBypass + AutoChest(10k -> 1k) + RAM Cleaner + AntiAFK")
