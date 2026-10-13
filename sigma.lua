@@ -1098,7 +1098,7 @@ task.spawn(function()
     task.spawn(function()
         while true do
             if State.Chihora then
-                pcall(function() GoldShopBuy:FireServer("Boss Ticket", 50) end)
+                pcall(function() GoldShopBuy:FireServer("Boss Ticket", 999) end)
             end
             task.wait(3)
         end
@@ -1263,7 +1263,7 @@ task.spawn(function()
 
     local CHEST_LIMIT    = 10000
     local OPEN_AMOUNT    = 1000
-    local CHECK_INTERVAL = 60
+    local CHECK_INTERVAL = 25
 
     local function getAmount(chestName)
         local data = LocalPlayer:FindFirstChild("Data")
