@@ -1263,7 +1263,7 @@ task.spawn(function()
 
     local CHEST_LIMIT    = 10000
     local OPEN_AMOUNT    = 1000
-    local CHECK_INTERVAL = 25
+    local CHECK_INTERVAL = 2
 
     local function getAmount(chestName)
         local data = LocalPlayer:FindFirstChild("Data")
