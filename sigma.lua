@@ -1091,16 +1091,16 @@ task.spawn(function()
     local Remotes   = ReplicatedStorage:WaitForChild("Remotes", 30)
     local Events    = Remotes:WaitForChild("Events", 30)
     local Functions = Remotes:WaitForChild("Functions", 30)
-    local GoldShopBuy = Events:WaitForChild("GoldShopBuy", 30)
+    local GoldShopBuy = Events:WaitForChild("GoldShopBuy", 999)
     local InputRemote = Functions:WaitForChild("Input", 30)
 
     -- Giữ nguyên: auto mua Boss Ticket
     task.spawn(function()
         while true do
             if State.Chihora then
-                pcall(function() GoldShopBuy:FireServer("Boss Ticket", 999) end)
+                pcall(function() GoldShopBuy:FireServer("Boss Ticket", 25) end)
             end
-            task.wait(3)
+            task.wait(0.1)
         end
     end)
 
